@@ -1,4 +1,4 @@
-name: Update S&P 500 Historical File
+name: Update Index Constituents
 
 on:
   schedule:
