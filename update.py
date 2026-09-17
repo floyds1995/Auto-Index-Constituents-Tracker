@@ -7,7 +7,7 @@ URL = "https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500"
 
 # ---------- 1. Load current file ----------
 df = pd.read_csv(CSV_FILE)
-df["date"] = pd.to_datetime(df["date"])
+df["date"] = pd.to_datetime(df["date"], format="mixed")
 df = df.sort_values("date").reset_index(drop=True)
 
 last_date = df["date"].iloc[-1]
@@ -22,7 +22,6 @@ resp.raise_for_status()
 tables = pd.read_html(StringIO(resp.text))
 changes_table = tables[0]
 
-# Flatten MultiIndex columns
 if isinstance(changes_table.columns, pd.MultiIndex):
     flat = []
     for c in changes_table.columns:
@@ -30,18 +29,14 @@ if isinstance(changes_table.columns, pd.MultiIndex):
         flat.append("_".join(parts).strip("_"))
     changes_table.columns = flat
 
-# 🔍 DEBUG: show what columns we actually got
 print("DEBUG columns:", changes_table.columns.tolist())
-print("DEBUG first row:", changes_table.iloc[0].tolist())
 
-# Drop duplicate header row if present
 first_row_str = " ".join(str(x) for x in changes_table.iloc[0].tolist()).lower()
 if "ticker" in first_row_str and "security" in first_row_str:
     changes_table = changes_table.iloc[1:].reset_index(drop=True)
 
-# ---------- 3. Find the right columns by keyword ----------
+# ---------- 3. Find columns by keyword ----------
 def find_col(df, *keywords):
-    """Find a column whose name contains ALL given keywords (case-insensitive)."""
     for c in df.columns:
         name = str(c).lower()
         if all(k.lower() in name for k in keywords):
@@ -52,14 +47,11 @@ date_col    = find_col(changes_table, "date")
 added_col   = find_col(changes_table, "added", "ticker")
 removed_col = find_col(changes_table, "removed", "ticker")
 
-# Fallback: if "added"+"ticker" fails, just find any column containing "ticker"
 ticker_cols = [c for c in changes_table.columns if "ticker" in str(c).lower()]
 if added_col is None and len(ticker_cols) >= 1:
     added_col = ticker_cols[0]
 if removed_col is None and len(ticker_cols) >= 2:
     removed_col = ticker_cols[1]
-
-# Fallback for date: first column
 if date_col is None:
     date_col = changes_table.columns[0]
 
@@ -80,8 +72,6 @@ changes_clean["removed"] = changes_clean["removed"].astype(str).replace("nan", "
 changes_clean = changes_clean.dropna(subset=["date"])
 
 print(f"DEBUG parsed {len(changes_clean)} change rows")
-print("DEBUG sample:")
-print(changes_clean.head(5).to_string(index=False))
 
 # ---------- 5. Filter to NEW changes ----------
 new_changes = changes_clean[changes_clean["date"] > last_date].sort_values("date")
@@ -106,5 +96,7 @@ for _, row in new_changes.iterrows():
         "tickers": ",".join(sorted(current_tickers)),
     }
 
+# ---------- 7. Normalize dates & save ----------
+df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
 df.to_csv(CSV_FILE, index=False)
 print(f"Saved. Total rows: {len(df)}. Final tickers: {len(current_tickers)}")
