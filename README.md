@@ -287,17 +287,6 @@ Users are responsible for complying with all applicable upstream licenses.
 
 ---
 
-## Contributing
-
-Issues and pull requests are welcome. If you spot an error in the historical data, please open an issue with:
-
-1. The index name
-2. The date in question
-3. What the correct composition should be
-4. A reference (Wikipedia revision, official announcement, etc.)
-
----
-
 ## Related Projects
 
 - [fja05680/sp500](https://github.com/fja05680/sp500) — the original S&P 500 constituent tracker that inspired this project
