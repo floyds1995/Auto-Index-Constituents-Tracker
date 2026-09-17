@@ -14,6 +14,10 @@ last_date = df["date"].iloc[-1]
 current_tickers = {t.strip() for t in str(df["tickers"].iloc[-1]).split(",") if t.strip()}
 
 print(f"File ends at: {last_date.date()}")
+print("DEBUG — last 5 rows after sorting:")
+print(df.tail(5).to_string())
+print("DEBUG — first 5 rows after sorting:")
+print(df.head(5).to_string())
 print(f"Current tickers: {len(current_tickers)}")
 
 # ---------- 2. Scrape Wikipedia change log ----------
