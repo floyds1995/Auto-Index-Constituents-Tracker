@@ -2,7 +2,7 @@ import pandas as pd
 import requests
 from io import StringIO
 
-CSV_FILE = "S&P 500 Historical Components & Changes (Updated).csv"
+CSV_FILE = "S&P 500 Historical Components & Changes.csv"
 URL = "https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500"
 
 # ---------- 1. Load current file ----------
