@@ -2,7 +2,7 @@ name: Update Nasdaq 100 Constituents
 
 on:
   schedule:
-    - cron: '0 0 * * *'        # 5:30 AM IST = 00:00 UTC
+    - cron: '30 23 * * *'         # 5:30 AM IST = 00:00 UTC
   workflow_dispatch:
 
 jobs:
