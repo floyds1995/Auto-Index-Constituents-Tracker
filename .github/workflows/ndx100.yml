@@ -1,0 +1,39 @@
+name: Update Nasdaq 100 Constituents
+
+on:
+  schedule:
+    - cron: '0 0 * * *'        # 5:30 AM IST = 00:00 UTC
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Nasdaq 100 updater
+        run: python NDX100/update_ndx100.py
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add NDX100/
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Nasdaq 100 update: $(date -u +%Y-%m-%d)"
+            git push
+          fi
