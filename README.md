@@ -137,15 +137,17 @@ All scripts are idempotent. Re-running with no source-side changes produces no o
 
 ## Automated Schedules
 
+All three workflows run in the early morning IST, staggered 10 minutes apart so their commits never race on push:
+
 | Workflow | Cron (UTC) | IST equivalent | Source |
 |---|---|---|---|
 | `snp500.yml` | `30 23 * * *` | 5:00 AM | Wikipedia |
-| `ndx100.yml` | `0 0 * * *` | 5:30 AM | Wikipedia |
-| `nse.yml` | `30 10 * * *` | 4:00 PM | NSE |
+| `ndx100.yml` | `40 23 * * *` | 5:10 AM | Wikipedia |
+| `nse.yml` | `50 23 * * *` | 5:20 AM | NSE |
 
 - GitHub Actions schedules are always in UTC and may be delayed by 5–30 minutes during peak load
+- The 10-minute gaps mean each workflow finishes and pushes before the next one starts — no commit races, no rebase needed
 - **Manual runs** can be triggered anytime from the **Actions** tab → select the workflow → **Run workflow**
-- The three schedules are staggered so commits don't race on push
 
 ---
 
