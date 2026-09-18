@@ -304,6 +304,7 @@ This repository is provided **for research and educational purposes only**.
 - Wikipedia's change logs are not guaranteed to be complete, accurate, or timely
 - The S&P 500 data traces back to a commercial data provider (Norgate Data) via a book download; redistribution or commercial use may be subject to additional terms
 - NSE constituent data is owned by NSE Indices Limited and subject to their terms of use
+- NSE historical constituent data is a **best-effort reconstruction** from archived snapshots and press releases — it may contain gaps, approximate dates, or corporate actions miscategorized as changes
 - Nothing here constitutes financial advice
 
 If you are using this data for quantitative backtesting, be aware of the risks of **survivorship bias** and **look-ahead bias**. This dataset is specifically designed to help mitigate survivorship bias by preserving the full historical membership list — but only if the data is correct.
