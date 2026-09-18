@@ -8,13 +8,12 @@ a new row only if the composition has changed.
 File format (matches existing S&P/Nasdaq tracker):
     date<TAB>tickers
     4/30/2013<TAB>ADANIPORTS,APOLLOHOSP,...
-
-Runs from GitHub Actions. No external services required.
 """
 
 import csv
 import io
 import os
+import re
 import sys
 from datetime import datetime
 import requests
@@ -45,12 +44,11 @@ HEADERS = {
     "Accept":  "text/csv,*/*",
 }
 
-# Script lives in NSE/, and CSVs live in the same folder
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 # ─── Helpers ─────────────────────────────────────────────────────────────
 def fetch_symbols(url):
-    """Download the CSV, return sorted list of symbols."""
     r = requests.get(url, headers=HEADERS, timeout=30)
     r.raise_for_status()
     if r.text.lstrip().startswith("<"):
@@ -58,25 +56,53 @@ def fetch_symbols(url):
     reader = csv.DictReader(io.StringIO(r.text))
     symbols = [row["Symbol"].strip() for row in reader if row.get("Symbol")]
     if not symbols:
-        raise ValueError("No symbols parsed from CSV")
+        raise ValueError("No symbols parsed from NSE CSV")
     return sorted(symbols)
 
 
+def detect_delimiter(path):
+    """Return '\t' or ',' depending on what the file actually uses."""
+    with open(path, "r", newline="", encoding="utf-8-sig") as f:
+        first = f.readline()
+    if "\t" in first:
+        return "\t"
+    if "," in first:
+        return ","
+    # Last-resort: assume tab
+    return "\t"
+
+
+def looks_like_date(s):
+    s = (s or "").strip()
+    return bool(re.match(r"^\d{1,4}[/-]\d{1,2}[/-]\d{1,4}$", s))
+
+
 def read_last_row(path):
-    """Return the last data row (date, tickers) from the TSV file."""
-    with open(path, "r", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        next(reader, None)  # skip header
-        last = None
-        for row in reader:
-            if row and len(row) >= 2:
-                last = row
-        return last
+    """Return the last valid (date, tickers) row, robust to delimiters."""
+    with open(path, "r", newline="", encoding="utf-8-sig") as f:
+        content = f.read()
+
+    if not content.strip():
+        return None
+
+    delim = detect_delimiter(path)
+    reader = csv.reader(io.StringIO(content), delimiter=delim)
+    rows = [r for r in reader if r and len(r) >= 2]
+
+    if not rows:
+        return None
+
+    # If the first row's first cell doesn't look like a date, treat it as header
+    if not looks_like_date(rows[0][0]):
+        rows = rows[1:]
+
+    return rows[-1] if rows else None
 
 
 def append_row(path, date_str, tickers):
-    with open(path, "a", newline="") as f:
-        writer = csv.writer(f, delimiter="\t")
+    delim = detect_delimiter(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter=delim)
         writer.writerow([date_str, tickers])
 
 
@@ -92,7 +118,11 @@ def main():
 
             last = read_last_row(path)
             if last is None:
-                raise ValueError(f"No data rows in {filename}")
+                # Diagnose: show first 200 bytes so the log reveals the real format
+                with open(path, "rb") as f:
+                    head = f.read(200)
+                raise ValueError(f"No data rows. File head = {head!r}")
+
             last_tickers = last[1].strip()
 
             if last_tickers == new_tickers:
