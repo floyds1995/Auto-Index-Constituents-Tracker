@@ -276,6 +276,24 @@ NSE constituent snapshots are sourced directly from **NSE Indices Limited** (a s
 
 NSE Indices Limited is the owner of all NSE index data. Redistribution is subject to NSE's terms of use.
 
+#### How the NSE Historical Data Was Built
+
+Unlike the S&P 500 dataset (which traces back to a single commercial source), the NSE historical files were **assembled manually** from two sources:
+
+1. **Historical snapshots** collected over time — for dates where we had a saved copy of the constituents
+2. **NSE's official press releases** — for additions and removals announced via NSE Indices Limited circulars
+
+This means the NSE files are **best-effort reconstructions**, not a certified historical record. As a result:
+
+- Some change dates may be **missing** — if no press release or snapshot was available
+- Some change dates may be **approximate** — detection date is used where an exact effective date wasn't published
+- **Corporate actions** (mergers, demergers, name changes, ticker symbol changes) may appear as adds/removes when they are really the same company continuing under a new identity
+- NSE occasionally **revises** announced changes, and those revisions may not be reflected if they occurred after the initial press release
+
+Where accuracy was possible, it was prioritized. Where it wasn't, the file reflects the **best available information at the time of collection**.
+
+**For any research or backtesting that depends on precise constituent history, verify the NSE files against primary sources** — NSE Indices Limited's circular archive and the historical index factsheets. Treat this dataset as a strong starting point, not a ground truth.
+
 ---
 
 ## Disclaimer
