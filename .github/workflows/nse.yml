@@ -2,7 +2,7 @@ name: Update NSE Constituents
 
 on:
   schedule:
-    - cron: '30 23 * * *'   
+    - cron: '50 23 * * *'   
   workflow_dispatch:
 
 jobs:
