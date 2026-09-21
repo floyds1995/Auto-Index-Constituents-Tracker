@@ -1,8 +1,8 @@
 # Auto-Index-Constituents-Tracker
 
-Automated daily tracker for historical index constituents and NSE reference data. Currently supports S&P 500, Nasdaq 100, 13 NSE indices (Nifty 50 through Nifty Smallcap 250), plus two NSE reference archives: symbol changes and corporate actions.
+Automated daily tracker for historical index constituents and NSE reference data. Currently supports S&P 500, Nasdaq 100, 13 NSE indices (Nifty 50 through Nifty Smallcap 250), two NSE reference archives (symbol changes and corporate actions), and the complete NSE equity EOD OHLCV history since 1995.
 
-Each dataset is stored as a single CSV. GitHub Actions runs on a schedule, fetches the latest data from the official source, and appends new rows only when something actually changed.
+Each dataset is stored as a single CSV (or, for OHLCV, monthly Parquet files). GitHub Actions runs on a schedule, fetches the latest data from the official source, and appends new rows only when something actually changed.
 
 No servers. No cron jobs. No external services — just GitHub Actions, Wikipedia, and NSE's official endpoints.
 
@@ -61,6 +61,61 @@ Each scheduled run:
 
 The local file is authoritative and append-only. If NSE re-publishes an old record, the sync script will not touch it.
 
+### NSE equity EOD OHLCV
+
+Complete daily bhavcopy for the NSE equity segment, covering **1995-01-02 → present**. Every trading day, every listed symbol — price, volume, delivery quantity, and trade count.
+
+Stored as one Parquet file per completed month, plus a live CSV folder for the current (incomplete) month:
+
+```text
+NSE/RawDataOHLCV/
+├── parquet/
+│   ├── 1995-01.parquet
+│   ├── 1995-02.parquet
+│   ├── ...
+│   └── 2026-08.parquet
+├── csv/
+│   └── 2026-09/                ← current month only
+│       ├── 20260901.csv
+│       ├── ...
+│       └── 20260918.csv
+```
+
+**Schema (identical across CSV and Parquet):**
+
+| Column | Type | Description |
+|---|---|---|
+| `SYMBOL` | categorical | NSE trading symbol |
+| `SERIES` | categorical | Series code (`EQ`, `BE`, `GS`, `GB`, etc.) |
+| `DATE` | timestamp | Trading date |
+| `OPEN` | float32 | Opening price |
+| `HIGH` | float32 | Day high |
+| `LOW` | float32 | Day low |
+| `CLOSE` | float32 | Closing price |
+| `LAST` | float32 | Last traded price |
+| `PREV_CLOSE` | float32 | Previous close |
+| `VOLUME` | int64 | Total traded quantity |
+| `TURNOVER` | float64 | Total traded value (rupees) |
+| `TRADES` | int64 | Number of trades |
+| `ISIN` | string | ISIN code |
+| `DELIV_QTY` | int64 | Delivered quantity |
+| `DELIV_PER` | float32 | Delivery percentage |
+| `SOURCE` | categorical | `old` (1995–2019) or `new` (2019–present) |
+
+Each scheduled run:
+
+1. Scans the filesystem (`parquet/` + `csv/`) to determine what's already collected — the manifest is not used as state
+2. Computes the list of missing weekdays from `1995-01-02` up to yesterday
+3. Skips dates already classified as permanent market closures (holidays, NSE archive gaps)
+4. Downloads each missing date from NSE (NEW endpoint for 2019+, OLD zip archive for 1995–2019)
+5. Validates the DATE inside the file matches the filename (rejects NSE's "stale file" responses on holiday URLs)
+6. Saves CSVs to `csv/YYYY-MM/YYYYMMDD.csv` (folder auto-created)
+7. Any month now fully past → consolidated into `parquet/YYYY-MM.parquet` and CSVs deleted
+8. Rebuilds `manifest.csv` from disk, refreshes `failed_events_summary.txt`
+9. Commits if anything changed
+
+**Coverage:** ~7,945 of 8,275 expected weekdays. The 430 missing dates are all NSE market closures — documented in `failed_events.csv` with a reason per date.
+
 ## Supported Sources
 
 ### S&P 500 and Nasdaq 100
@@ -100,6 +155,19 @@ NSE's endpoint returns a snapshot (current composition only). The script parses 
 
 Both endpoints are maintained by NSE. The corporate actions endpoint requires a warmed session (homepage visit first) and returns the last N days on request. The symbol change archive is a static CSV, no cookies required.
 
+### NSE equity EOD OHLCV
+
+| Dataset | Location | Source |
+|---|---|---|
+| NSE equity OHLCV | `NSE/RawDataOHLCV/parquet/` + `NSE/RawDataOHLCV/csv/` | NSE archives |
+
+Two historical endpoints:
+
+- **1995 – 2019-08:** `https://nsearchives.nseindia.com/content/historical/EQUITIES/YYYY/MON/cmDDMONYYYYbhav.csv.zip`
+- **2019-08 – present:** `https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv`
+
+The updater tries the newer endpoint first (richer schema — includes delivery quantities), falls back to the older zip archive for dates where the newer one doesn't exist. There is no cookie or session handling required; the archive endpoints are open.
+
 ## Repository Structure
 
 ```text
@@ -110,7 +178,8 @@ Auto-Index-Constituents-Tracker/
 │   ├── ndx100.yml                            # Nasdaq 100 daily automation
 │   ├── nse.yml                               # NSE index daily automation
 │   ├── symbolchange.yml                      # NSE symbol change daily automation
-│   └── corporate_actions.yml                 # NSE corporate actions daily automation
+│   ├── corporate_actions.yml                 # NSE corporate actions daily automation
+│   └── nse_ohlcv.yml                         # NSE equity OHLCV daily automation
 │
 ├── SNP500/
 │   ├── update_snp500.py
@@ -125,11 +194,26 @@ Auto-Index-Constituents-Tracker/
 │   ├── Nifty_50.csv
 │   ├── Nifty_100.csv
 │   ├── ... (12 NSE index files)
-│   └── RawData/
-│       ├── update_symbolchange.py
-│       ├── symbolchange.csv
-│       ├── update_corporate_actions.py
-│       └── CorporateActions.csv
+│   │
+│   ├── RawData/
+│   │   ├── update_symbolchange.py
+│   │   ├── symbolchange.csv
+│   │   ├── update_corporate_actions.py
+│   │   └── CorporateActions.csv
+│   │
+│   └── RawDataOHLCV/
+│       ├── update_ohlcv.py
+│       ├── README.md
+│       ├── manifest.csv
+│       ├── failed_events.csv
+│       ├── failed_events_summary.txt
+│       ├── parquet/
+│       │   ├── 1995-01.parquet
+│       │   ├── ...
+│       │   └── 2026-08.parquet
+│       └── csv/
+│           └── 2026-09/
+│               └── YYYYMMDD.csv
 │
 ├── requirements.txt
 └── README.md
@@ -188,15 +272,34 @@ The script (`NSE/RawData/update_corporate_actions.py`):
 
 The 7-day rolling window (not just today) catches late NSE posts, missed runs, and post-announcement edits. Re-fetching overlaps is harmless — the dedupe layer filters everything that already exists.
 
+### NSE equity OHLCV
+
+The script (`NSE/RawDataOHLCV/update_ohlcv.py`):
+
+1. **Scan disk** — walks `parquet/` and `csv/` to build the set of dates already collected. The manifest is not trusted as state; it's regenerated from disk each run.
+2. **Compute missing** — enumerates every weekday from `1995-01-02` to yesterday, subtracts dates on disk, subtracts dates in `failed_events.csv` marked as permanent (holidays, NSE archive gaps).
+3. **Download each missing date** — tries the NEW endpoint first (2019+), falls back to the OLD zip endpoint (1995–2019).
+4. **Validate** — rejects files where the internal `DATE` column doesn't match the filename. This catches NSE's habit of serving the previous trading day's data on holiday URLs.
+5. **Save CSV** — to `csv/YYYY-MM/YYYYMMDD.csv`. The month folder is auto-created if new.
+6. **Consolidate** — for any `csv/YYYY-MM/` folder where the month is now in the past, reads all CSVs, casts to the final schema (float32 prices, Int64 volumes, categorical strings, sorted by SYMBOL then DATE), writes a single zstd-9 Parquet file to `parquet/YYYY-MM.parquet`, verifies row count on readback, then deletes the CSVs.
+7. **Rebuild manifest** — from disk, not memory.
+8. **Write summary** — regenerates `failed_events_summary.txt` with coverage-by-year.
+
+Failure classes are logged in `failed_events.csv`: `FIXED_HOLIDAY` (Republic Day, Independence Day, etc.), `HOLIDAY_NON_FIXED` (Diwali, Holi, Eid, etc.), `PERMANENT_GAP` (NSE returns empty), `NETWORK_ERROR` and `PARSE_ERROR` (retried next run).
+
+The updater runs every day including weekends. Weekend runs are effectively no-ops (the expected weekday list naturally skips them), but the Saturday run ensures Friday's data is collected the morning after, rather than waiting until Monday.
+
 ### Idempotency and append-only guarantee
 
 All scripts are idempotent. Re-running with no source-side changes produces no output and no commit.
 
 The two NSE reference archives are append-only: existing rows are never modified, deleted, or reordered. If NSE re-publishes an old record, the sync script silently skips it. If a row you have locally differs slightly from what NSE now shows (e.g. a typo fix), both versions persist — the historical record is preserved.
 
+The OHLCV collection is also idempotent, but not append-only in the same sense — a given date's CSV or Parquet file can be safely re-downloaded and overwritten. The filesystem is the source of truth; deleting a file simply causes the next run to re-fetch it.
+
 ## Automated Schedules
 
-All five workflows run in the early morning IST, staggered 10 minutes apart so their commits never race on push:
+All six workflows run in the early morning IST, staggered 10 minutes apart so their commits never race on push:
 
 | Workflow | Cron (UTC) | IST equivalent | Source |
 |---|---|---|---|
@@ -205,17 +308,19 @@ All five workflows run in the early morning IST, staggered 10 minutes apart so t
 | `nse.yml` | `50 23 * * *` | 5:20 AM | NSE Indices |
 | `corporate_actions.yml` | `0 0 * * *` | 5:30 AM | NSE API |
 | `symbolchange.yml` | `10 0 * * *` | 5:40 AM | NSE archive |
+| `nse_ohlcv.yml` | `20 0 * * *` | 5:50 AM | NSE archive |
 
 - GitHub Actions schedules are always in UTC and may be delayed by 5–30 minutes during peak load
 - The 10-minute gaps mean each workflow finishes and pushes before the next one starts — no commit races, no rebase needed
 - Manual runs can be triggered anytime from the Actions tab → select the workflow → Run workflow
+- `nse_ohlcv.yml` runs seven days a week. On weekends the OHLCV script exits quickly because there is nothing new to fetch
 
 ## Setup
 
 ### Prerequisites
 
 - A GitHub account
-- A free or paid GitHub Actions plan (free is sufficient — this repo uses roughly 60 minutes of Actions time per month across all five workflows)
+- A free or paid GitHub Actions plan (free is sufficient — this repo uses roughly 90 minutes of Actions time per month across all six workflows)
 
 ### GitHub Setup
 
@@ -249,9 +354,42 @@ python NDX100/update_ndx100.py
 python NSE/update_nse.py
 python NSE/RawData/update_symbolchange.py
 python NSE/RawData/update_corporate_actions.py
+python NSE/RawDataOHLCV/update_ohlcv.py
 ```
 
 Each script prints a short summary — local row count, remote row count, and whether anything was added.
+
+The OHLCV updater additionally supports:
+
+```bash
+python NSE/RawDataOHLCV/update_ohlcv.py --dry-run          # show plan, no downloads
+python NSE/RawDataOHLCV/update_ohlcv.py --no-consolidate   # skip Parquet conversion
+python NSE/RawDataOHLCV/update_ohlcv.py --date 2026-09-18  # single date
+```
+
+## Reading the OHLCV data
+
+```python
+import pandas as pd
+
+# One month
+df = pd.read_parquet("NSE/RawDataOHLCV/parquet/2020-03.parquet")
+
+# One year
+import glob
+dfs = [pd.read_parquet(f) for f in glob.glob("NSE/RawDataOHLCV/parquet/2020-*.parquet")]
+df_2020 = pd.concat(dfs, ignore_index=True)
+
+# One stock's full history
+import glob, pandas as pd
+dfs = []
+for f in sorted(glob.glob("NSE/RawDataOHLCV/parquet/*.parquet")):
+    d = pd.read_parquet(f, columns=["SYMBOL", "DATE", "CLOSE"])
+    dfs.append(d[d["SYMBOL"] == "RELIANCE"])
+reliance = pd.concat(dfs).sort_values("DATE")
+```
+
+The current (incomplete) month lives at `NSE/RawDataOHLCV/csv/YYYY-MM/` as one CSV per trading day. It is browsable directly on GitHub.
 
 ## Adding a New Source
 
@@ -282,6 +420,13 @@ The next scheduled run picks it up automatically.
 
 **Note:** The Wikipedia scraper tolerates minor variations in table headers because it locates columns by keyword. NSE requires the response CSV to have a `Symbol` column.
 
+### For OHLCV-style (bulk historical + daily incremental)
+
+1. Copy `NSE/RawDataOHLCV/update_ohlcv.py` as a template
+2. Adjust `COLLECTION_START`, the URL builders, and the failure-classification rules for the new source
+3. Add a matching workflow under `.github/workflows/`
+4. Commit and push
+
 ## Manual Trigger
 
 To run any workflow immediately:
@@ -290,7 +435,7 @@ To run any workflow immediately:
 2. Click the workflow name in the left sidebar
 3. Click **Run workflow → Run workflow**
 
-Each run takes roughly 30–90 seconds depending on the source.
+Each run takes roughly 30–90 seconds depending on the source. The OHLCV updater's runtime varies with how many dates are missing — usually 1–2 seconds on a normal day, up to a few minutes when catching up.
 
 ## Credits & Data Sources
 
@@ -353,7 +498,14 @@ NSE corporate actions are fetched from the corporate filings API:
 - Columns: `SYMBOL`, `COMPANY NAME`, `SERIES`, `PURPOSE`, `FACE VALUE`, `EX-DATE`, `RECORD DATE`, `BOOK CLOSURE START DATE`, `BOOK CLOSURE END DATE`
 - Requires a warmed session (visit `nseindia.com` first to establish cookies) and browser-like headers
 
-NSE Indices Limited is the owner of all NSE index data. Redistribution is subject to NSE's terms of use.
+NSE equity OHLCV data is sourced from two NSE archive endpoints:
+
+- `https://nsearchives.nseindia.com/content/historical/EQUITIES/YYYY/MON/cmDDMONYYYYbhav.csv.zip` (1995–2019)
+- `https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv` (2019–present)
+
+Both are open, unauthenticated, and use standard HTTP. The OHLCV updater does not require a warmed session.
+
+NSE Indices Limited is the owner of all NSE index and OHLCV data. Redistribution is subject to NSE's terms of use.
 
 ### How the NSE Historical Data Was Built
 
@@ -371,9 +523,11 @@ This means the NSE files are best-effort reconstructions, not a certified histor
 
 The `CorporateActions.csv` and `symbolchange.csv` files were built from a large bulk download of NSE's own archives, then extended daily by the sync scripts. The bulk download captured all history NSE publicly exposes; the daily syncs append new entries as NSE publishes them.
 
+The OHLCV dataset was bulk-downloaded once (1995-01-02 through the collection date), validated against NSE's own archive, and has been incrementally extended by the daily workflow since. Every date's internal `DATE` column is checked against its filename to reject NSE's occasional "stale file on holiday URL" behavior.
+
 Where accuracy was possible, it was prioritized. Where it wasn't, the file reflects the best available information at the time of collection.
 
-For any research or backtesting that depends on precise constituent history, verify the NSE files against primary sources — NSE Indices Limited's circular archive and the historical index factsheets. Treat this dataset as a strong starting point, not a ground truth.
+For any research or backtesting that depends on precise constituent or price history, verify the NSE files against primary sources — NSE Indices Limited's circular archive and the historical index factsheets. Treat this dataset as a strong starting point, not a ground truth.
 
 ## Disclaimer
 
@@ -385,6 +539,7 @@ This repository is provided for research and educational purposes only.
 - NSE constituent data is owned by NSE Indices Limited and subject to their terms of use
 - NSE historical constituent data is a best-effort reconstruction from archived snapshots and press releases — it may contain gaps, approximate dates, or corporate actions miscategorized as changes
 - The symbol change and corporate action archives are append-only and preserved as-is. Errors present in NSE's published data will propagate through to these files
+- The OHLCV data is sourced from NSE's public archives. Precision on prices is limited to float32 (~7 significant digits) — sufficient for NSE's 2-decimal price convention, but not for high-precision financial computation
 - Nothing here constitutes financial advice
 
 If you are using this data for quantitative backtesting, be aware of the risks of survivorship bias and look-ahead bias. This dataset is specifically designed to help mitigate survivorship bias by preserving the full historical membership list — but only if the data is correct.
@@ -401,7 +556,7 @@ The data in this repository is subject to the terms of its upstream sources:
 - S&P 500 change data (2019–present) and format: derived from [fja05680/sp500](https://github.com/fja05680/sp500) (MIT License)
 - Wikipedia-derived change data: CC BY-SA 4.0
 - Nasdaq 100 historical data: Wikipedia, CC BY-SA 4.0
-- NSE index, symbol change, and corporate actions data: © NSE Indices Limited
+- NSE index, symbol change, corporate actions, and OHLCV data: © NSE Indices Limited
 
 Users are responsible for complying with all applicable upstream licenses.
 
@@ -411,7 +566,7 @@ Users are responsible for complying with all applicable upstream licenses.
 - **Norgate Data** — the underlying data provider for the original S&P 500 history
 - **fja05680** — creator of [fja05680/sp500](https://github.com/fja05680/sp500), which provided the foundation, format, and methodology for this project
 - **Wikipedia contributors** — for maintaining the historical components pages that make ongoing automation possible
-- **NSE Indices Limited** — for publishing official constituent lists, symbol change archives, and corporate action announcements
+- **NSE Indices Limited** — for publishing official constituent lists, symbol change archives, corporate action announcements, and EOD bhavcopy archives
 
 ## Related Projects
 
