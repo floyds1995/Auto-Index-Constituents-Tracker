@@ -1,0 +1,39 @@
+name: Update NSE Corporate Actions
+
+on:
+  schedule:
+    - cron: '10 0 * * *'   # 5:40 AM IST = 00:10 UTC
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run corporate actions updater
+        run: python NSE/RawData/update_corporate_actions.py
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add NSE/RawData/CorporateActions.csv
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "NSE corporate actions: $(date -u +%Y-%m-%d)"
+            git push
+          fi
