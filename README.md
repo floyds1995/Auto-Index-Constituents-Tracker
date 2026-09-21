@@ -1,18 +1,18 @@
 # Auto-Index-Constituents-Tracker
 
-Automated daily tracker for historical index constituents. Currently supports **S&P 500**, **Nasdaq 100**, and **13 NSE indices** (Nifty 50 through Nifty Smallcap 250).
+Automated daily tracker for historical index constituents and NSE reference data. Currently supports S&P 500, Nasdaq 100, 13 NSE indices (Nifty 50 through Nifty Smallcap 250), plus two NSE reference archives: symbol changes and corporate actions.
 
-Each index is stored as a single CSV containing the full membership of that index on every date a change occurred. GitHub Actions runs on a schedule, fetches the latest composition from the official source, and appends a new row only when something actually changed.
+Each dataset is stored as a single CSV. GitHub Actions runs on a schedule, fetches the latest data from the official source, and appends new rows only when something actually changed.
 
 No servers. No cron jobs. No external services — just GitHub Actions, Wikipedia, and NSE's official endpoints.
 
----
-
 ## What It Does
+
+### Index constituents
 
 Every tracked index is stored in this format:
 
-```
+```text
 date,tickers
 1996-01-02,"AAL,AAMRQ,AAPL,ABI,..."
 1996-01-03,"AAL,AAMRQ,AAPL,ABI,..."
@@ -20,8 +20,8 @@ date,tickers
 2026-08-18,"AAPL,ABNB,ADBE,..."
 ```
 
-- **One row per date the composition changed** — not every trading day
-- **`tickers`** is the full, sorted, comma-separated list of constituents on that date
+- One row per date the composition changed — not every trading day
+- `tickers` is the full, sorted, comma-separated list of constituents on that date
 - The last row always represents the current composition
 - S&P 500 and Nasdaq 100 use ISO dates (`YYYY-MM-DD`); NSE files use `M/D/YYYY` to match the historical format
 
@@ -33,51 +33,84 @@ Each scheduled run:
 4. If different → appends a new row with today's date
 5. Commits the update back to the repo
 
-**If nothing changed, the workflow exits cleanly with no commit.**
+If nothing changed, the workflow exits cleanly with no commit.
 
----
+### NSE reference archives (symbol changes + corporate actions)
 
-## Supported Indices
+Two additional files maintain an append-only history of NSE reference data:
+
+```text
+SYMBOL,COMPANY NAME,SERIES,PURPOSE,FACE VALUE,EX-DATE,RECORD DATE,BOOK CLOSURE START DATE,BOOK CLOSURE END DATE
+CGVAK,CG Vak Software & Exports Limited,EQ,Dividend - Re 1 Per Share,10,21-Sep-2026,21-Sep-2026,-,-
+...
+```
+
+```text
+Name,Old Symbol,New Symbol,Date of change
+360 ONE WAM LIMITED,IIFLWAM,360ONE,23-Jan-2023
+...
+```
+
+Each scheduled run:
+
+1. Reads the local CSV as-is (existing rows are never modified or removed)
+2. Fetches the last 7 days from the NSE endpoint
+3. Normalizes both sides semantically (whitespace, case, date format)
+4. Appends only rows whose normalized key doesn't already exist locally
+5. Commits if anything new was added
+
+The local file is authoritative and append-only. If NSE re-publishes an old record, the sync script will not touch it.
+
+## Supported Sources
 
 ### S&P 500 and Nasdaq 100
 
-| Index | Data File | Source |
+| Dataset | File | Source |
 |---|---|---|
-| S&P 500 | `SNP500/S&P 500 Historical Components & Changes.csv` | [Wikipedia: Historical components of the S&P 500](https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500) |
-| Nasdaq 100 | `NDX100/Nasdaq 100 Historical Components & Changes.csv` | [Wikipedia: Historical components of the Nasdaq-100](https://en.wikipedia.org/wiki/Historical_components_of_the_Nasdaq-100) |
+| S&P 500 | `SNP500/S&P 500 Historical Components & Changes.csv` | [Wikipedia: Historical components of the S&P 500](https://en.wikipedia.org/wiki/List_of_S%26P_500_companies#Selected_changes_to_the_list_of_S%26P_500_components) |
+| Nasdaq 100 | `NDX100/Nasdaq 100 Historical Components & Changes.csv` | [Wikipedia: Historical components of the Nasdaq-100](https://en.wikipedia.org/wiki/Nasdaq-100#Historical_components) |
 
-Both sources list changes with columns for **Effective Date**, **Added Ticker**, and **Removed Ticker**, which is what the scraper relies on.
+Both sources list changes with columns for Effective Date, Added Ticker, and Removed Ticker, which is what the scraper relies on.
 
-### NSE Indices
+### NSE indices
 
-| Index | Data File | Source |
+| Index | File | Source |
 |---|---|---|
-| Nifty 50 | `NSE/Nifty_50.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv) |
-| Nifty 100 | `NSE/Nifty_100.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv) |
-| Nifty 200 | `NSE/Nifty_200.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv) |
-| Nifty 500 | `NSE/Nifty_500.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv) |
-| Nifty Midcap 50 | `NSE/Nifty_Midcap_50.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftymidcap50list.csv) |
-| Nifty Midcap 100 | `NSE/Nifty_Midcap_100.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftymidcap100list.csv) |
-| Nifty Midcap 150 | `NSE/Nifty_Midcap_150.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftymidcap150list.csv) |
-| Nifty MidSmallcap 400 | `NSE/Nifty_MidSmallcap_400.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftymidsmallcap400list.csv) |
-| Nifty Next 50 | `NSE/Nifty_Next_50.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftynext50list.csv) |
-| Nifty Smallcap 50 | `NSE/Nifty_Smallcap_50.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftysmallcap50list.csv) |
-| Nifty Smallcap 100 | `NSE/Nifty_Smallcap_100.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftysmallcap100list.csv) |
-| Nifty Smallcap 250 | `NSE/Nifty_Smallcap_250.csv` | [NSE official](https://www.niftyindices.com/IndexConstituent/ind_niftysmallcap250list.csv) |
+| Nifty 50 | `NSE/Nifty_50.csv` | NSE official |
+| Nifty 100 | `NSE/Nifty_100.csv` | NSE official |
+| Nifty 200 | `NSE/Nifty_200.csv` | NSE official |
+| Nifty 500 | `NSE/Nifty_500.csv` | NSE official |
+| Nifty Midcap 50 | `NSE/Nifty_Midcap_50.csv` | NSE official |
+| Nifty Midcap 100 | `NSE/Nifty_Midcap_100.csv` | NSE official |
+| Nifty Midcap 150 | `NSE/Nifty_Midcap_150.csv` | NSE official |
+| Nifty MidSmallcap 400 | `NSE/Nifty_MidSmallcap_400.csv` | NSE official |
+| Nifty Next 50 | `NSE/Nifty_Next_50.csv` | NSE official |
+| Nifty Smallcap 50 | `NSE/Nifty_Smallcap_50.csv` | NSE official |
+| Nifty Smallcap 100 | `NSE/Nifty_Smallcap_100.csv` | NSE official |
+| Nifty Smallcap 250 | `NSE/Nifty_Smallcap_250.csv` | NSE official |
 
 NSE's endpoint returns a snapshot (current composition only). The script parses the `Symbol` column, compares with the last row, and appends when different.
 
----
+### NSE reference archives
+
+| Dataset | File | Source |
+|---|---|---|
+| Symbol changes | `NSE/RawData/symbolchange.csv` | NSE archive |
+| Corporate actions | `NSE/RawData/CorporateActions.csv` | NSE API |
+
+Both endpoints are maintained by NSE. The corporate actions endpoint requires a warmed session (homepage visit first) and returns the last N days on request. The symbol change archive is a static CSV, no cookies required.
 
 ## Repository Structure
 
-```
+```text
 Auto-Index-Constituents-Tracker/
 │
 ├── .github/workflows/
 │   ├── snp500.yml                            # S&P 500 daily automation
 │   ├── ndx100.yml                            # Nasdaq 100 daily automation
-│   └── nse.yml                               # NSE daily automation
+│   ├── nse.yml                               # NSE index daily automation
+│   ├── symbolchange.yml                      # NSE symbol change daily automation
+│   └── corporate_actions.yml                 # NSE corporate actions daily automation
 │
 ├── SNP500/
 │   ├── update_snp500.py
@@ -91,15 +124,18 @@ Auto-Index-Constituents-Tracker/
 │   ├── update_nse.py
 │   ├── Nifty_50.csv
 │   ├── Nifty_100.csv
-│   └── ... (12 NSE index files)
+│   ├── ... (12 NSE index files)
+│   └── RawData/
+│       ├── update_symbolchange.py
+│       ├── symbolchange.csv
+│       ├── update_corporate_actions.py
+│       └── CorporateActions.csv
 │
 ├── requirements.txt
 └── README.md
 ```
 
 Each source is self-contained: own folder, own script, own workflow. Independent schedules, independent failure domains. If one source breaks, the others continue running.
-
----
 
 ## How It Works
 
@@ -115,9 +151,9 @@ The scripts (`SNP500/update_snp500.py`, `NDX100/update_ndx100.py`):
 6. Append a new row per change date
 7. Overwrite the file with normalized date formatting
 
-Wikipedia provides **exact effective dates**, so rows reflect when changes actually took effect.
+Wikipedia provides exact effective dates, so rows reflect when changes actually took effect.
 
-### NSE Indices
+### NSE indices
 
 The script (`NSE/update_nse.py`):
 
@@ -129,34 +165,57 @@ The script (`NSE/update_nse.py`):
 
 NSE's endpoint does not provide an effective date — only the current composition. So detection date is used, which may trail the actual effective date by 1–3 days.
 
-### Idempotency
+### NSE symbol changes
 
-All scripts are idempotent. Re-running with no source-side changes produces no output and no commit. Safe on any schedule.
+The script (`NSE/RawData/update_symbolchange.py`):
 
----
+1. Fetch the static CSV from `nsearchives.nseindia.com`
+2. Validate structurally (four comma-separated fields per row; remote has no header)
+3. Build a normalized key per remote row: `(Name, Old Symbol, New Symbol, Date)` with whitespace collapse, case folding, ISO date conversion, and leading-zero stripping on purely numeric symbols
+4. Skip any remote row whose key already exists locally
+5. Append remaining rows, canonicalizing dates to `DD-Mon-YYYY`
+6. Sort by `Name` then `Date` for stability
+
+### NSE corporate actions
+
+The script (`NSE/RawData/update_corporate_actions.py`):
+
+1. Warm cookies by visiting `nseindia.com`
+2. Fetch the last 7 days from the corporate actions API
+3. Build a normalized key per row across all nine columns
+4. Skip any remote row whose key already exists locally
+5. Append remaining rows in `EX-DATE`-ascending order
+
+The 7-day rolling window (not just today) catches late NSE posts, missed runs, and post-announcement edits. Re-fetching overlaps is harmless — the dedupe layer filters everything that already exists.
+
+### Idempotency and append-only guarantee
+
+All scripts are idempotent. Re-running with no source-side changes produces no output and no commit.
+
+The two NSE reference archives are append-only: existing rows are never modified, deleted, or reordered. If NSE re-publishes an old record, the sync script silently skips it. If a row you have locally differs slightly from what NSE now shows (e.g. a typo fix), both versions persist — the historical record is preserved.
 
 ## Automated Schedules
 
-All three workflows run in the early morning IST, staggered 10 minutes apart so their commits never race on push:
+All five workflows run in the early morning IST, staggered 10 minutes apart so their commits never race on push:
 
 | Workflow | Cron (UTC) | IST equivalent | Source |
 |---|---|---|---|
 | `snp500.yml` | `30 23 * * *` | 5:00 AM | Wikipedia |
 | `ndx100.yml` | `40 23 * * *` | 5:10 AM | Wikipedia |
-| `nse.yml` | `50 23 * * *` | 5:20 AM | NSE |
+| `nse.yml` | `50 23 * * *` | 5:20 AM | NSE Indices |
+| `corporate_actions.yml` | `0 0 * * *` | 5:30 AM | NSE API |
+| `symbolchange.yml` | `10 0 * * *` | 5:40 AM | NSE archive |
 
 - GitHub Actions schedules are always in UTC and may be delayed by 5–30 minutes during peak load
 - The 10-minute gaps mean each workflow finishes and pushes before the next one starts — no commit races, no rebase needed
-- **Manual runs** can be triggered anytime from the **Actions** tab → select the workflow → **Run workflow**
-
----
+- Manual runs can be triggered anytime from the Actions tab → select the workflow → Run workflow
 
 ## Setup
 
 ### Prerequisites
 
 - A GitHub account
-- A free or paid GitHub Actions plan (free is sufficient — this repo uses roughly 45 minutes of Actions time per month across all three workflows)
+- A free or paid GitHub Actions plan (free is sufficient — this repo uses roughly 60 minutes of Actions time per month across all five workflows)
 
 ### GitHub Setup
 
@@ -169,27 +228,32 @@ Without this step, the workflows will run but fail to push commits back to the r
 
 ### Local Development
 
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/YOUR-USERNAME/Auto-Index-Constituents-Tracker.git
-   cd Auto-Index-Constituents-Tracker
-   ```
+Clone the repo:
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+git clone https://github.com/YOUR-USERNAME/Auto-Index-Constituents-Tracker.git
+cd Auto-Index-Constituents-Tracker
+```
 
-3. Run any updater:
-   ```bash
-   python SNP500/update_snp500.py
-   python NDX100/update_ndx100.py
-   python NSE/update_nse.py
-   ```
+Install dependencies:
 
----
+```bash
+pip install -r requirements.txt
+```
 
-## Adding a New Index
+Run any updater:
+
+```bash
+python SNP500/update_snp500.py
+python NDX100/update_ndx100.py
+python NSE/update_nse.py
+python NSE/RawData/update_symbolchange.py
+python NSE/RawData/update_corporate_actions.py
+```
+
+Each script prints a short summary — local row count, remote row count, and whether anything was added.
+
+## Adding a New Source
 
 ### For S&P 500 / Nasdaq 100 style (Wikipedia-sourced)
 
@@ -199,51 +263,55 @@ Without this step, the workflows will run but fail to push commits back to the r
 4. Add a matching workflow under `.github/workflows/`
 5. Commit and push
 
-### For NSE style (official snapshot)
+### For NSE index style (official snapshot)
 
 1. Open `NSE/update_nse.py`
 2. Add an entry to the `INDICES` dict — `"Nifty_XXX.csv": "https://.../ind_niftyxxxlist.csv"`
-3. Drop a starter CSV (with header `date\ttickers` and at least one row) into `NSE/`
+3. Drop a starter CSV (with header `date,tickers` and at least one row) into `NSE/`
 4. Commit and push
 
 The next scheduled run picks it up automatically.
 
-**Note:** The Wikipedia scraper tolerates minor variations in table headers because it locates columns by keyword. NSE requires the response CSV to have a `Symbol` column.
+### For NSE reference archive style (append-only)
 
----
+1. Copy `NSE/RawData/update_symbolchange.py` as a template
+2. Replace `NSE_CSV_URL` / `API` / `COLS` with the new source's values
+3. Drop a starter CSV into `NSE/RawData/`
+4. Add a workflow that targets only the new CSV (`git add` must name the file explicitly, not the folder — otherwise the two workflows can stage each other's changes)
+5. Commit and push
+
+**Note:** The Wikipedia scraper tolerates minor variations in table headers because it locates columns by keyword. NSE requires the response CSV to have a `Symbol` column.
 
 ## Manual Trigger
 
 To run any workflow immediately:
 
 1. Go to the **Actions** tab
-2. Click the workflow name in the left sidebar (`Update S&P 500 Constituents`, `Update Nasdaq 100 Constituents`, or `Update NSE Constituents`)
-3. Click **Run workflow** → **Run workflow**
+2. Click the workflow name in the left sidebar
+3. Click **Run workflow → Run workflow**
 
-Each run takes roughly 30–60 seconds.
-
----
+Each run takes roughly 30–90 seconds depending on the source.
 
 ## Credits & Data Sources
 
 ### Inspiration & Original S&P 500 Dataset
 
-The S&P 500 history in this repository originated from **[fja05680/sp500](https://github.com/fja05680/sp500)**, a widely-used open-source project that maintains current and historical S&P 500 component lists since 1996. That repository provided:
+The S&P 500 history in this repository originated from [fja05680/sp500](https://github.com/fja05680/sp500), a widely-used open-source project that maintains current and historical S&P 500 component lists since 1996. That repository provided:
 
 - The original `S&P 500 Historical Components & Changes.csv` file (1996–2019)
 - The methodology for merging historical data with Wikipedia's change log
 - The two-column `date,tickers` CSV format used throughout this repo
 
-The `fja05680/sp500` project is licensed under the **MIT License**. Anyone using this repository's S&P 500 data should review that project's license terms.
+The `fja05680/sp500` project is licensed under the MIT License. Anyone using this repository's S&P 500 data should review that project's license terms.
 
 ### Original Book Source (S&P 500, 1996–2019)
 
-The original S&P 500 constituent history from 1996 to 2019 was distributed as a downloadable file accompanying the book **"Trading Evolved"** by **Andreas F. Clenow**.
+The original S&P 500 constituent history from 1996 to 2019 was distributed as a downloadable file accompanying the book **"Trading Evolved"** by Andreas F. Clenow.
 
 Clenow is a professional quantitative trader and author. The data in *Trading Evolved* was sourced from **Norgate Data**, which is one of the few providers that properly handles delisted and renamed securities — essential for survivorship-bias-free backtesting.
 
 - Book: *Trading Evolved* by Andreas F. Clenow
-- Data provider referenced: [Norgate Data](https://norgatedata.com/)
+- Data provider referenced: Norgate Data
 
 All credit for the original 1996–2019 S&P 500 constituent history belongs to Andreas Clenow and Norgate Data.
 
@@ -251,83 +319,91 @@ All credit for the original 1996–2019 S&P 500 constituent history belongs to A
 
 Both US indices rely on Wikipedia's community-maintained change logs:
 
-- **S&P 500:** [Historical components of the S&P 500](https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500)
-- **Nasdaq 100:** [Historical components of the Nasdaq-100](https://en.wikipedia.org/wiki/Historical_components_of_the_Nasdaq-100)
+- S&P 500: [Historical components of the S&P 500](https://en.wikipedia.org/wiki/List_of_S%26P_500_companies#Selected_changes_to_the_list_of_S%26P_500_components)
+- Nasdaq 100: [Historical components of the Nasdaq-100](https://en.wikipedia.org/wiki/Nasdaq-100#Historical_components)
 
 Wikipedia content is available under the [Creative Commons Attribution-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-sa/4.0/).
 
-**Important caveat:** Wikipedia's change logs are **not exhaustive**. They show *selected* changes and are sometimes incomplete, delayed, or contain errors. They are a helpful starting point but should not be treated as an authoritative source for regulatory or financial decisions.
+**Important caveat:** Wikipedia's change logs are not exhaustive. They show selected changes and are sometimes incomplete, delayed, or contain errors. They are a helpful starting point but should not be treated as an authoritative source for regulatory or financial decisions.
 
 ### Nasdaq 100 Historical Data
 
 The initial Nasdaq 100 constituent history in this repository was compiled from the Wikipedia historical components page linked above. Unlike the S&P 500 data, it does not derive from a commercial dataset. Users should be aware that:
 
-- Coverage begins in **February 2007**
+- Coverage begins in February 2007
 - Wikipedia's Nasdaq 100 change log may be less complete than the S&P 500 one
 - The data has not been independently verified against a commercial source
 
 ### NSE Data
 
-NSE constituent snapshots are sourced directly from **NSE Indices Limited** (a subsidiary of the National Stock Exchange of India):
+NSE constituent snapshots are sourced directly from NSE Indices Limited (a subsidiary of the National Stock Exchange of India):
 
 - Endpoint pattern: `https://www.niftyindices.com/IndexConstituent/ind_<index>list.csv`
 - Each snapshot lists the current constituents with columns: `Company Name`, `Industry`, `Symbol`, `Series`, `ISIN Code`
 - NSE updates indices on a periodic review basis (semi-annual for broad-market, quarterly for some strategy indices, ad-hoc for corporate actions)
 
+NSE symbol changes are fetched from the archive endpoint:
+
+- `https://nsearchives.nseindia.com/content/equities/symbolchange.csv`
+- Columns: `Name`, `Old Symbol`, `New Symbol`, `Date of change` (no header in the remote file — validated structurally)
+
+NSE corporate actions are fetched from the corporate filings API:
+
+- `https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date=...&to_date=...&csv=true`
+- Columns: `SYMBOL`, `COMPANY NAME`, `SERIES`, `PURPOSE`, `FACE VALUE`, `EX-DATE`, `RECORD DATE`, `BOOK CLOSURE START DATE`, `BOOK CLOSURE END DATE`
+- Requires a warmed session (visit `nseindia.com` first to establish cookies) and browser-like headers
+
 NSE Indices Limited is the owner of all NSE index data. Redistribution is subject to NSE's terms of use.
 
-#### How the NSE Historical Data Was Built
+### How the NSE Historical Data Was Built
 
-Unlike the S&P 500 dataset (which traces back to a single commercial source), the NSE historical files were **assembled manually** from two sources:
+Unlike the S&P 500 dataset (which traces back to a single commercial source), the NSE historical files were assembled manually from two sources:
 
-1. **Historical snapshots** collected over time — for dates where we had a saved copy of the constituents
-2. **NSE's official press releases** — for additions and removals announced via NSE Indices Limited circulars
+1. Historical snapshots collected over time — for dates where we had a saved copy of the constituents
+2. NSE's official press releases — for additions and removals announced via NSE Indices Limited circulars
 
-This means the NSE files are **best-effort reconstructions**, not a certified historical record. As a result:
+This means the NSE files are best-effort reconstructions, not a certified historical record. As a result:
 
-- Some change dates may be **missing** — if no press release or snapshot was available
-- Some change dates may be **approximate** — detection date is used where an exact effective date wasn't published
-- **Corporate actions** (mergers, demergers, name changes, ticker symbol changes) may appear as adds/removes when they are really the same company continuing under a new identity
-- NSE occasionally **revises** announced changes, and those revisions may not be reflected if they occurred after the initial press release
+- Some change dates may be missing — if no press release or snapshot was available
+- Some change dates may be approximate — detection date is used where an exact effective date wasn't published
+- Corporate actions (mergers, demergers, name changes, ticker symbol changes) may appear as adds/removes when they are really the same company continuing under a new identity
+- NSE occasionally revises announced changes, and those revisions may not be reflected if they occurred after the initial press release
 
-Where accuracy was possible, it was prioritized. Where it wasn't, the file reflects the **best available information at the time of collection**.
+The `CorporateActions.csv` and `symbolchange.csv` files were built from a large bulk download of NSE's own archives, then extended daily by the sync scripts. The bulk download captured all history NSE publicly exposes; the daily syncs append new entries as NSE publishes them.
 
-**For any research or backtesting that depends on precise constituent history, verify the NSE files against primary sources** — NSE Indices Limited's circular archive and the historical index factsheets. Treat this dataset as a strong starting point, not a ground truth.
+Where accuracy was possible, it was prioritized. Where it wasn't, the file reflects the best available information at the time of collection.
 
----
+For any research or backtesting that depends on precise constituent history, verify the NSE files against primary sources — NSE Indices Limited's circular archive and the historical index factsheets. Treat this dataset as a strong starting point, not a ground truth.
 
 ## Disclaimer
 
-This repository is provided **for research and educational purposes only**.
+This repository is provided for research and educational purposes only.
 
-- The constituent data is assembled from community-maintained and official sources, and **may contain errors, omissions, or inconsistencies**
+- The constituent data is assembled from community-maintained and official sources, and may contain errors, omissions, or inconsistencies
 - Wikipedia's change logs are not guaranteed to be complete, accurate, or timely
 - The S&P 500 data traces back to a commercial data provider (Norgate Data) via a book download; redistribution or commercial use may be subject to additional terms
 - NSE constituent data is owned by NSE Indices Limited and subject to their terms of use
-- NSE historical constituent data is a **best-effort reconstruction** from archived snapshots and press releases — it may contain gaps, approximate dates, or corporate actions miscategorized as changes
+- NSE historical constituent data is a best-effort reconstruction from archived snapshots and press releases — it may contain gaps, approximate dates, or corporate actions miscategorized as changes
+- The symbol change and corporate action archives are append-only and preserved as-is. Errors present in NSE's published data will propagate through to these files
 - Nothing here constitutes financial advice
 
-If you are using this data for quantitative backtesting, be aware of the risks of **survivorship bias** and **look-ahead bias**. This dataset is specifically designed to help mitigate survivorship bias by preserving the full historical membership list — but only if the data is correct.
+If you are using this data for quantitative backtesting, be aware of the risks of survivorship bias and look-ahead bias. This dataset is specifically designed to help mitigate survivorship bias by preserving the full historical membership list — but only if the data is correct.
 
-**Always verify against an authoritative source before making financial decisions.**
-
----
+Always verify against an authoritative source before making financial decisions.
 
 ## License
 
-The **code** in this repository (all `update_*.py` files, workflow files) is available under the MIT License.
+The code in this repository (all `update_*.py` files, workflow files) is available under the MIT License.
 
-The **data** in this repository is subject to the terms of its upstream sources:
+The data in this repository is subject to the terms of its upstream sources:
 
 - S&P 500 historical data (1996–2019): originally from *Trading Evolved* by Andreas Clenow / Norgate Data
 - S&P 500 change data (2019–present) and format: derived from [fja05680/sp500](https://github.com/fja05680/sp500) (MIT License)
 - Wikipedia-derived change data: CC BY-SA 4.0
 - Nasdaq 100 historical data: Wikipedia, CC BY-SA 4.0
-- NSE constituent data: © NSE Indices Limited
+- NSE index, symbol change, and corporate actions data: © NSE Indices Limited
 
 Users are responsible for complying with all applicable upstream licenses.
-
----
 
 ## Acknowledgements
 
@@ -335,9 +411,7 @@ Users are responsible for complying with all applicable upstream licenses.
 - **Norgate Data** — the underlying data provider for the original S&P 500 history
 - **fja05680** — creator of [fja05680/sp500](https://github.com/fja05680/sp500), which provided the foundation, format, and methodology for this project
 - **Wikipedia contributors** — for maintaining the historical components pages that make ongoing automation possible
-- **NSE Indices Limited** — for publishing official constituent lists
-
----
+- **NSE Indices Limited** — for publishing official constituent lists, symbol change archives, and corporate action announcements
 
 ## Related Projects
 
