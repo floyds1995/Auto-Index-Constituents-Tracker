@@ -4,9 +4,12 @@ NSE Equity OHLCV Daily Updater
 ==============================
 
 Downloads daily EOD bhavcopy for NSE equity, validates freshness,
-auto-consolidates completed months into Parquet, and keeps a manifest.
+auto-consolidates completed months into Parquet, and rebuilds the manifest.
 
-Run every day via GitHub Actions. Safe to run repeatedly — idempotent.
+Source of truth = filesystem (parquet/ + csv/ folders).
+The manifest is derived state — regenerated every run.
+
+Safe to run repeatedly — idempotent, crash-safe.
 
 CLI:
     python update_ohlcv.py                    # default (up to yesterday)
@@ -65,10 +68,10 @@ FIXED_HOLIDAYS = {
     "12-25": "Christmas",
 }
 
-# Failure categories — never retry these (they're permanent)
+# Categories we never retry (permanent market closures)
 PERMANENT_CATEGORIES = {"FIXED_HOLIDAY", "PERMANENT_GAP", "HOLIDAY_NON_FIXED"}
 
-# Normalized output schema for all files
+# Normalized output schema
 NORMALIZED_COLS = [
     "SYMBOL", "SERIES", "DATE", "OPEN", "HIGH", "LOW", "CLOSE", "LAST",
     "PREV_CLOSE", "VOLUME", "TURNOVER", "TRADES", "ISIN",
@@ -96,25 +99,22 @@ PARQUET_SCHEMA = pa.schema([
 ])
 
 # ============================================================
-# Logging — clean and simple for GitHub Actions output
+# Logging
 # ============================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",   # don't clutter with timestamps/levels
-)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("ohlcv")
 
 def section(title):
-    """Print a section header."""
     log.info("")
     log.info("=" * 60)
     log.info(title)
     log.info("=" * 60)
 
-def info(msg):  log.info(msg)
-def warn(msg):  log.warning(f"⚠️  {msg}")
-def good(msg):  log.info(f"✅ {msg}")
-def bad(msg):   log.warning(f"❌ {msg}")
+def info(msg): log.info(msg)
+def warn(msg): log.warning(f"⚠️  {msg}")
+def good(msg): log.info(f"✅ {msg}")
+def bad(msg):  log.warning(f"❌ {msg}")
+
 
 # ============================================================
 # URL builders
@@ -130,6 +130,7 @@ def url_old(y, m, d):
     return (f"https://nsearchives.nseindia.com/content/historical/EQUITIES/"
             f"{y}/{mn}/cm{d:02d}{mn}{y}bhav.csv.zip")
 
+
 # ============================================================
 # Filesystem paths
 # ============================================================
@@ -143,6 +144,7 @@ def parquet_path_for(ym):
     """parquet/YYYY-MM.parquet"""
     return os.path.join(PARQUET_DIR, f"{ym[:4]}-{ym[4:6]}.parquet")
 
+
 # ============================================================
 # HTTP with retries
 # ============================================================
@@ -155,11 +157,12 @@ def http_get(url):
                 time.sleep(RETRY_BACKOFF ** attempt * 2)
                 continue
             return r.status_code, r.content
-        except requests.RequestException as e:
+        except requests.RequestException:
             if attempt == MAX_RETRIES:
                 return "EXC", None
             time.sleep(RETRY_BACKOFF ** attempt)
     return "EXC", None
+
 
 # ============================================================
 # Validation helpers
@@ -173,10 +176,7 @@ def strip_df(df):
     return df
 
 def validate_parsed(parsed_dates, expected_date, min_match=0.80):
-    """
-    Reject stale files. NSE serves previous day's data on holiday URLs.
-    Requires >= 80% of rows to match the expected date.
-    """
+    """Reject stale files. Requires >=80% of rows to match expected date."""
     if parsed_dates is None or parsed_dates.isna().all():
         return False, "empty_date_column"
     ratio = (parsed_dates == expected_date).mean()
@@ -200,8 +200,9 @@ def validate_dataframe(df):
         return False, "ohlc_sanity_fail"
     return True, "ok"
 
+
 # ============================================================
-# Fetchers — return (DataFrame, reason)
+# Fetchers — return (DataFrame or None, reason)
 # ============================================================
 def fetch_new(y, m, d):
     """Try the NEW (2019+) URL."""
@@ -288,19 +289,16 @@ def fetch_old(y, m, d):
     except Exception as e:
         return None, f"parse_error: {type(e).__name__}"
 
+
 # ============================================================
 # Download one date
 # ============================================================
 def download_date(d):
-    """
-    Download a single date.
-    Returns dict with: date, status (ok/fail), source, rows,
-    category (if fail), reason (if fail).
-    """
+    """Download a single date. Returns dict: date, status, source/rows or category/reason."""
     y, m, dd = d.year, d.month, d.day
     reasons = []
 
-    # Try NEW first for 2016+
+    # Pre-2016: only OLD exists. 2016+: try NEW first.
     if y >= 2016:
         df, why = fetch_new(y, m, dd)
         time.sleep(REQUEST_DELAY)
@@ -322,7 +320,7 @@ def download_date(d):
     else:
         reasons.append("new: skipped_pre2016")
 
-    # Try OLD as fallback
+    # OLD fallback
     df, why = fetch_old(y, m, dd)
     time.sleep(REQUEST_DELAY)
     if df is not None:
@@ -341,7 +339,7 @@ def download_date(d):
     else:
         reasons.append(f"old: {why}")
 
-    # ---- Classify the failure ----
+    # Classify failure
     mm_dd = d.strftime("%m-%d")
     if mm_dd in FIXED_HOLIDAYS:
         return {"date": d.isoformat(), "status": "fail",
@@ -360,14 +358,71 @@ def download_date(d):
     return {"date": d.isoformat(), "status": "fail",
             "category": "NETWORK_ERROR", "reason": " | ".join(reasons)[:300]}
 
+
+# ============================================================
+# State discovery — scan disk (source of truth)
+# ============================================================
+def scan_parquet_dates():
+    """Return set of dates present in parquet/ folder."""
+    found = set()
+    if not os.path.isdir(PARQUET_DIR):
+        return found
+    for f in sorted(os.listdir(PARQUET_DIR)):
+        if not f.endswith(".parquet"):
+            continue
+        try:
+            df = pd.read_parquet(os.path.join(PARQUET_DIR, f), columns=["DATE"])
+            df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+            found |= set(df["DATE"].dropna().dt.date.unique())
+        except Exception as e:
+            warn(f"  Could not read {f}: {e}")
+    return found
+
+def scan_csv_dates():
+    """Return set of dates present in csv/ folder."""
+    found = set()
+    if not os.path.isdir(CSV_DIR):
+        return found
+    for sub in sorted(os.listdir(CSV_DIR)):
+        sub_path = os.path.join(CSV_DIR, sub)
+        if not os.path.isdir(sub_path):
+            continue
+        for f in sorted(os.listdir(sub_path)):
+            if not f.endswith(".csv"):
+                continue
+            try:
+                df = pd.read_csv(os.path.join(sub_path, f), usecols=["DATE"])
+                df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+                d = df["DATE"].dropna().iloc[0].date() if len(df) else None
+                if d:
+                    found.add(d)
+            except Exception:
+                pass
+    return found
+
+def load_permanent_failures():
+    """Return set of dates that are permanent (never retry)."""
+    if not os.path.exists(FAILED_CSV):
+        return set(), pd.DataFrame()
+    df = pd.read_csv(FAILED_CSV)
+    if len(df) == 0:
+        return set(), df
+    fail_col = "category" if "category" in df.columns else "class"
+    permanent = set()
+    for s in df[df[fail_col].isin(PERMANENT_CATEGORIES)]["date"].tolist():
+        try:
+            permanent.add(date.fromisoformat(s))
+        except (ValueError, TypeError):
+            pass
+    return permanent, df
+
+
 # ============================================================
 # Consolidate completed months → Parquet
 # ============================================================
 def consolidate_completed_months(today):
-    """
-    For every csv/YYYY-MM folder where month < current month,
-    write parquet/YYYY-MM.parquet and delete the CSV folder.
-    """
+    """For every csv/YYYY-MM folder where month < current month,
+    write parquet/YYYY-MM.parquet and delete the CSV folder."""
     if not os.path.isdir(CSV_DIR):
         return []
 
@@ -399,7 +454,6 @@ def consolidate_completed_months(today):
 
         info(f"  Consolidating {folder}: {len(csvs)} CSVs → 1 Parquet")
 
-        # Read all CSVs
         frames = [pd.read_csv(os.path.join(full, f)) for f in csvs]
         combined = pd.concat(frames, ignore_index=True)
         del frames
@@ -412,7 +466,7 @@ def consolidate_completed_months(today):
             del combined
             continue
 
-        # Cast types to match historical Parquet
+        # Cast types
         combined["DATE"] = pd.to_datetime(combined["DATE"], errors="coerce")
         for col in ["SYMBOL", "SERIES", "SOURCE"]:
             if col in combined.columns:
@@ -460,6 +514,7 @@ def consolidate_completed_months(today):
         del combined, back
 
     return consolidated
+
 
 # ============================================================
 # Rebuild manifest from filesystem
@@ -513,7 +568,8 @@ def rebuild_manifest():
                         "rows":         len(df),
                         "size_bytes":   os.path.getsize(path),
                         "source":       src,
-                        "collected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "collected_at": datetime.now(timezone.utc).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"),
                     })
                 except Exception as e:
                     warn(f"  Could not read {f}: {e}")
@@ -522,12 +578,12 @@ def rebuild_manifest():
     manifest.to_csv(MANIFEST, index=False)
     return manifest
 
+
 # ============================================================
 # Summary writer
 # ============================================================
-def write_summary(expected_dates, manifest_df, failed_df):
+def write_summary(expected_dates, have_dates, failed_df):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    have_dates = set(manifest_df["date"].tolist()) if len(manifest_df) else set()
 
     lines = [
         "NSE Equity Data — Failed Events Summary",
@@ -540,9 +596,8 @@ def write_summary(expected_dates, manifest_df, failed_df):
         "",
     ]
 
-    if len(failed_df):
+    if failed_df is not None and len(failed_df):
         lines.append("Breakdown by category:")
-        # Support both old and new column names
         col = "category" if "category" in failed_df.columns else "class"
         for cat, n in failed_df[col].value_counts().items():
             lines.append(f"  {cat:22s} {int(n):4d}")
@@ -552,7 +607,7 @@ def write_summary(expected_dates, manifest_df, failed_df):
     df_exp = pd.DataFrame({"date": [d.strftime("%Y%m%d") for d in expected_dates]})
     df_exp["year"] = df_exp["date"].str[:4]
     cov = df_exp.groupby("year").size().rename("expected").to_frame()
-    df_have = pd.DataFrame({"date": sorted(have_dates)})
+    df_have = pd.DataFrame({"date": sorted(d.strftime("%Y%m%d") for d in have_dates)})
     if len(df_have):
         df_have["year"] = df_have["date"].str[:4]
         cov["on_disk"] = (df_have.groupby("year").size()
@@ -568,6 +623,7 @@ def write_summary(expected_dates, manifest_df, failed_df):
     with open(SUMMARY_TXT, "w") as f:
         f.write("\n".join(lines))
 
+
 # ============================================================
 # Date helpers
 # ============================================================
@@ -579,6 +635,7 @@ def expected_weekdays(start, end):
             out.append(cur)
         cur += timedelta(days=1)
     return out
+
 
 # ============================================================
 # Main
@@ -597,64 +654,58 @@ def main():
                   else today - timedelta(days=1))
 
     # =========================================================
-    # STEP 1 — Load state
+    # STEP 1 — Scan disk (source of truth)
     # =========================================================
-    section("STEP 1 — Load state")
-    info(f"Target date range:  {COLLECTION_START} → {target_end}")
+    section("STEP 1 — Scan disk")
+    info(f"Target range:    {COLLECTION_START} → {target_end}")
 
-    manifest_df = (pd.read_csv(MANIFEST) if os.path.exists(MANIFEST)
-                   else pd.DataFrame())
-    manifest_dates = set(manifest_df["date"].tolist()) if len(manifest_df) else set()
-    info(f"Manifest:           {len(manifest_dates):,} dates collected")
+    parquet_dates = scan_parquet_dates()
+    info(f"Parquet dates:   {len(parquet_dates):,}")
 
-    failed_df = (pd.read_csv(FAILED_CSV) if os.path.exists(FAILED_CSV)
-                 else pd.DataFrame())
+    csv_dates = scan_csv_dates()
+    info(f"CSV dates:       {len(csv_dates):,}")
 
-    # Support both "category" (new) and "class" (old) column names
-    if len(failed_df):
-        fail_col = "category" if "category" in failed_df.columns else "class"
-        permanent = set(
-            failed_df[failed_df[fail_col].isin(PERMANENT_CATEGORIES)]["date"].tolist()
-        )
-        info(f"Failed events:      {len(failed_df):,} total, "
-             f"{len(permanent):,} permanent (holidays/gaps)")
-    else:
-        permanent = set()
-        info(f"Failed events:      (none)")
+    have_dates = parquet_dates | csv_dates
+    info(f"TOTAL on disk:   {len(have_dates):,}")
+
+    permanent, failed_df = load_permanent_failures()
+    info(f"Permanent gaps:  {len(permanent):,} (holidays, NSE archive holes)")
 
     # =========================================================
-    # STEP 2 — Compute missing dates
+    # STEP 2 — Compute what's missing
     # =========================================================
-    section("STEP 2 — Compute what's missing")
+    section("STEP 2 — Compute missing dates")
 
     expected = expected_weekdays(COLLECTION_START, target_end)
-    info(f"Expected weekdays:  {len(expected):,}")
+    info(f"Expected weekdays: {len(expected):,}")
 
     todo = [d for d in expected
-            if d.isoformat() not in manifest_dates
-            and d.isoformat() not in permanent]
-    info(f"To download:        {len(todo):,}")
+            if d not in have_dates and d not in permanent]
+    info(f"To download:       {len(todo):,}")
 
     if not todo:
         info("")
         good("Nothing to fetch — collection is up to date.")
-        # Still consolidate and rebuild manifest (cheap ops)
+
+        # Still consolidate + rebuild manifest (cheap)
         if not args.no_consolidate:
-            section("STEP 5 — Check for completed months")
+            section("STEP 4 — Consolidate completed months")
             consolidated = consolidate_completed_months(today)
             if consolidated:
                 good(f"Consolidated {len(consolidated)} month(s)")
             else:
                 info("No completed months to consolidate.")
-        section("STEP 7 — Rebuild manifest")
-        manifest_df = rebuild_manifest()
-        info(f"Manifest now:       {len(manifest_df):,} dates")
-        write_summary(expected, manifest_df, failed_df)
+
+        section("STEP 5 — Rebuild manifest")
+        rebuild_manifest()
+        have_dates = scan_parquet_dates() | scan_csv_dates()
+        info(f"Manifest rows: {len(have_dates):,}")
+
+        write_summary(expected, have_dates, failed_df)
         info("")
         good("Done.")
         return
 
-    # Dry run — show plan and exit
     if args.dry_run:
         info("")
         info("Dry run — would fetch:")
@@ -693,25 +744,24 @@ def main():
         bad(f"Failed:     {len(new_failures)}")
 
     # =========================================================
-    # STEP 4 — Save failures
+    # STEP 4 — Log new failures
     # =========================================================
     if new_failures:
-        section("STEP 4 — Log new failures")
+        section("STEP 4 — Log failures")
         combined_fail = pd.concat([failed_df, pd.DataFrame(new_failures)],
                                   ignore_index=True)
-        # Normalize column name to "category"
         if "class" in combined_fail.columns and "category" not in combined_fail.columns:
             combined_fail = combined_fail.rename(columns={"class": "category"})
         combined_fail = combined_fail.drop_duplicates(subset=["date"], keep="last")
         combined_fail.to_csv(FAILED_CSV, index=False)
         failed_df = combined_fail
-        info(f"failed_events.csv updated: {len(failed_df):,} total rows")
+        info(f"failed_events.csv: {len(failed_df):,} total rows")
 
     # =========================================================
     # STEP 5 — Consolidate completed months
     # =========================================================
     if not args.no_consolidate:
-        section("STEP 5 — Check for completed months")
+        section("STEP 5 — Consolidate completed months")
         consolidated = consolidate_completed_months(today)
         if consolidated:
             good(f"Consolidated {len(consolidated)} month(s) into Parquet")
@@ -721,23 +771,20 @@ def main():
     # =========================================================
     # STEP 6 — Rebuild manifest
     # =========================================================
-    section("STEP 6 — Rebuild manifest from disk")
-    manifest_df = rebuild_manifest()
-    info(f"Manifest rows:  {len(manifest_df):,}")
-    if len(manifest_df):
-        info(f"Date range:     {manifest_df['date'].min()} → "
-             f"{manifest_df['date'].max()}")
+    section("STEP 6 — Rebuild manifest")
+    rebuild_manifest()
+    have_dates = scan_parquet_dates() | scan_csv_dates()
+    info(f"Manifest rows:  {len(have_dates):,}")
+    if have_dates:
+        info(f"Date range:     {min(have_dates)} → {max(have_dates)}")
 
     # =========================================================
     # STEP 7 — Write summary
     # =========================================================
     section("STEP 7 — Write summary")
-    write_summary(expected, manifest_df, failed_df)
-    info(f"Wrote: {SUMMARY_TXT}")
+    write_summary(expected, have_dates, failed_df)
+    good(f"Wrote: failed_events_summary.txt")
 
-    # =========================================================
-    # DONE
-    # =========================================================
     info("")
     section("DONE")
     good(f"{downloaded} new date(s) collected")
