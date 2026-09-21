@@ -1,0 +1,43 @@
+
+---
+
+## Part 5 — `.github/workflows/nse_ohlcv.yml`
+
+```yaml
+name: NSE OHLCV Daily Update
+
+on:
+  schedule:
+    - cron: "20 0 * * *"    # every day at 5:50 AM IST
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run OHLCV updater
+        working-directory: NSE/RawDataOHLCV
+        run: python update_ohlcv.py
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add NSE/RawDataOHLCV/
+          git diff --cached --quiet || git commit -m "chore: NSE OHLCV update $(date -u +%Y-%m-%d)"
+          git push
