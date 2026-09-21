@@ -1,43 +1,39 @@
-
----
-
-## Part 5 — `.github/workflows/nse_ohlcv.yml`
-
-```yaml
-name: NSE OHLCV Daily Update
+name: Update NSE OHLCV
 
 on:
   schedule:
-    - cron: "20 0 * * *"    # every day at 5:50 AM IST
+    - cron: '20 0 * * *'   # 5:50 AM IST = 00:20 UTC
   workflow_dispatch:
 
 jobs:
   update:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
-          cache: pip
+          python-version: '3.12'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run OHLCV updater
-        working-directory: NSE/RawDataOHLCV
-        run: python update_ohlcv.py
+        run: python NSE/RawDataOHLCV/update_ohlcv.py
 
-      - name: Commit changes
+      - name: Commit & push if changed
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add NSE/RawDataOHLCV/
-          git diff --cached --quiet || git commit -m "chore: NSE OHLCV update $(date -u +%Y-%m-%d)"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "NSE OHLCV: $(date -u +%Y-%m-%d)"
+            git push
+          fi
