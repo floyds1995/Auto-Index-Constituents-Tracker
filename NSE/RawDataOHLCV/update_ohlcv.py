@@ -47,10 +47,18 @@ FAILED_CSV   = os.path.join(SCRIPT_DIR, "failed_events.csv")
 SUMMARY_TXT  = os.path.join(SCRIPT_DIR, "failed_events_summary.txt")
 
 COLLECTION_START = date(1995, 1, 2)
-REQUEST_TIMEOUT  = 30
-REQUEST_DELAY    = 0.3
-MAX_RETRIES      = 3
-RETRY_BACKOFF    = 2.0
+
+# HTTP behaviour — tuned for NSE's archive, which is occasionally slow
+REQUEST_TIMEOUT  = 90      # seconds — archive can take 30-60s under load
+REQUEST_DELAY    = 0.3     # polite pause between requests
+MAX_RETRIES      = 5       # more attempts for transient failures
+RETRY_BACKOFF    = 3.0     # exponential: 3s, 9s, 27s, 81s, 243s
+
+# Grace period: dates within N days of today are NOT classified as permanent
+# holidays. NSE's nsearchives.nseindia.com CDN lags 12-24h behind the main
+# site, so a same-day workflow run will get a 404 for yesterday's file even
+# though it's a genuine trading day. Retry these for N days, then classify.
+GRACE_PERIOD_DAYS = 3
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -149,13 +157,22 @@ def parquet_path_for(ym):
 # HTTP with retries
 # ============================================================
 def http_get(url):
-    """GET with retries. Returns (status_code, content)."""
+    """GET with retries. Returns (status_code, content).
+
+    Returns "EXC" as status on unrecoverable exception. Retries on:
+      - RequestException (connection reset, timeout)
+      - HTTP 429 (rate limit)
+      - HTTP 5xx (server error)
+    """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            if r.status_code == 429:
-                time.sleep(RETRY_BACKOFF ** attempt * 2)
-                continue
+            # Retry on rate-limit or transient server error
+            if r.status_code == 429 or (500 <= r.status_code < 600):
+                if attempt < MAX_RETRIES:
+                    wait = RETRY_BACKOFF ** attempt
+                    time.sleep(wait)
+                    continue
             return r.status_code, r.content
         except requests.RequestException:
             if attempt == MAX_RETRIES:
@@ -339,11 +356,26 @@ def download_date(d):
     else:
         reasons.append(f"old: {why}")
 
+    # ============================================================
     # Classify failure
+    # ============================================================
     mm_dd = d.strftime("%m-%d")
+    days_ago = (date.today() - d).days
+
+    # Fixed holidays are always permanent
     if mm_dd in FIXED_HOLIDAYS:
         return {"date": d.isoformat(), "status": "fail",
                 "category": "FIXED_HOLIDAY", "reason": FIXED_HOLIDAYS[mm_dd]}
+
+    # Grace period — recent dates are retried, not classified as holidays.
+    # NSE's archive CDN lags 12-24h behind the main site, so a same-day
+    # workflow run will 404 for yesterday's file even though it exists.
+    if days_ago <= GRACE_PERIOD_DAYS:
+        return {"date": d.isoformat(), "status": "fail",
+                "category": "NETWORK_ERROR",
+                "reason": f"Not yet on NSE archive ({days_ago}d old) — will retry"}
+
+    # Older failures: safe to classify as permanent holiday / gap
     if any("stale_file" in r for r in reasons):
         return {"date": d.isoformat(), "status": "fail",
                 "category": "HOLIDAY_NON_FIXED",
