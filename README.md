@@ -1,5 +1,14 @@
 # Auto-Index-Constituents-Tracker
 
+![SNP500](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/snp500.yml/badge.svg)
+![NDX100](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/ndx100.yml/badge.svg)
+![NSE](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse.yml/badge.svg)
+![Corporate Actions](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/corporate_actions.yml/badge.svg)
+![Symbol Changes](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/symbolchange.yml/badge.svg)
+![NSE OHLCV](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse_ohlcv.yml/badge.svg)
+
+Automated daily tracker for historical index constituents...
+
 Automated daily tracker for historical index constituents and NSE reference data. Currently supports S&P 500, Nasdaq 100, 13 NSE indices (Nifty 50 through Nifty Smallcap 250), two NSE reference archives (symbol changes and corporate actions), and the complete NSE equity EOD OHLCV history since 1995.
 
 Each dataset is stored as a single CSV (or, for OHLCV, monthly Parquet files). GitHub Actions runs on a schedule, fetches the latest data from the official source, and appends new rows only when something actually changed.
