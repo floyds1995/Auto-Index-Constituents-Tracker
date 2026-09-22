@@ -2,7 +2,7 @@ name: Update NSE Corporate Actions
 
 on:
   schedule:
-    - cron: '0 0 * * *'   # 5:40 AM IST = 00:10 UTC
+    - cron: '40 2 * * *'   # 5:40 AM IST = 00:10 UTC
   workflow_dispatch:
 
 jobs:
