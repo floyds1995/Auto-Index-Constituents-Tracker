@@ -49,22 +49,31 @@ SUMMARY_TXT  = os.path.join(SCRIPT_DIR, "failed_events_summary.txt")
 COLLECTION_START = date(1995, 1, 2)
 
 # HTTP behaviour — tuned for NSE's archive, which is occasionally slow
-REQUEST_TIMEOUT  = 90      # seconds — archive can take 30-60s under load
-REQUEST_DELAY    = 0.3     # polite pause between requests
-MAX_RETRIES      = 5       # more attempts for transient failures
-RETRY_BACKOFF    = 3.0     # exponential: 3s, 9s, 27s, 81s, 243s
+REQUEST_TIMEOUT  = 90      # seconds
+REQUEST_DELAY    = 0.3
+MAX_RETRIES      = 5
+RETRY_BACKOFF    = 3.0     # 3s, 9s, 27s, 81s, 243s
 
 # Grace period: dates within N days of today are NOT classified as permanent
-# holidays. NSE's nsearchives.nseindia.com CDN lags 12-24h behind the main
-# site, so a same-day workflow run will get a 404 for yesterday's file even
-# though it's a genuine trading day. Retry these for N days, then classify.
+# holidays. NSE's archive CDN lags behind the main site, so same-day runs
+# often 404 even for genuine trading days. Retry these for N days.
 GRACE_PERIOD_DAYS = 3
 
+# Browser-like headers — reduces chance of NSE blocking automated requests
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                   "Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/csv,application/csv,*/*",
+    "Accept": "text/csv,application/csv,application/xhtml+xml,"
+              "application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.nseindia.com/",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 # NSE fixed market holidays — never retried
@@ -125,6 +134,28 @@ def bad(msg):  log.warning(f"❌ {msg}")
 
 
 # ============================================================
+# Session management — warm cookies once per run
+# ============================================================
+_SESSION = None
+_SESSION_WARMED = False
+
+def get_session():
+    """Return a warm requests.Session, establishing cookies on first call."""
+    global _SESSION, _SESSION_WARMED
+    if _SESSION is None:
+        _SESSION = requests.Session()
+        _SESSION.headers.update(HEADERS)
+    if not _SESSION_WARMED:
+        try:
+            _SESSION.get("https://www.nseindia.com/", timeout=15)
+            _SESSION_WARMED = True
+        except Exception:
+            # Warm-up failure is fine — we'll try the real URL anyway
+            _SESSION_WARMED = True
+    return _SESSION
+
+
+# ============================================================
 # URL builders
 # ============================================================
 def url_new(y, m, d):
@@ -159,22 +190,23 @@ def parquet_path_for(ym):
 def http_get(url):
     """GET with retries. Returns (status_code, content).
 
-    Returns "EXC" as status on unrecoverable exception. Retries on:
-      - RequestException (connection reset, timeout)
+    Uses a warm session. Retries on:
+      - RequestException (connection reset, timeout, DNS)
       - HTTP 429 (rate limit)
       - HTTP 5xx (server error)
     """
+    session = get_session()
+    last_exc = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            # Retry on rate-limit or transient server error
+            r = session.get(url, timeout=REQUEST_TIMEOUT)
             if r.status_code == 429 or (500 <= r.status_code < 600):
                 if attempt < MAX_RETRIES:
-                    wait = RETRY_BACKOFF ** attempt
-                    time.sleep(wait)
+                    time.sleep(RETRY_BACKOFF ** attempt)
                     continue
             return r.status_code, r.content
-        except requests.RequestException:
+        except requests.RequestException as e:
+            last_exc = e
             if attempt == MAX_RETRIES:
                 return "EXC", None
             time.sleep(RETRY_BACKOFF ** attempt)
@@ -228,12 +260,14 @@ def fetch_new(y, m, d):
     if status != 200 or not content:
         return None, f"http_{status}" if status != 200 else "empty_response"
     if content[:15].lstrip().startswith(b"<"):
-        return None, "html_error_page"
+        # NSE sometimes returns an HTML error/block page with 200 OK
+        snippet = content[:80].decode("utf-8", errors="replace").replace("\n", " ")
+        return None, f"html_error_page: {snippet}"
     try:
         df = pd.read_csv(StringIO(content.decode("utf-8", errors="replace")))
         df = strip_df(df)
         if "DATE1" not in df.columns:
-            return None, "missing_DATE1"
+            return None, f"missing_DATE1 (got columns: {list(df.columns)[:5]})"
         parsed = pd.to_datetime(df["DATE1"], format="%d-%b-%Y", errors="coerce").dt.date
         ok, why = validate_parsed(parsed, date(y, m, d))
         if not ok:
@@ -258,7 +292,7 @@ def fetch_new(y, m, d):
         })
         return out[NORMALIZED_COLS], "ok"
     except Exception as e:
-        return None, f"parse_error: {type(e).__name__}"
+        return None, f"parse_error: {type(e).__name__}: {e}"[:200]
 
 def fetch_old(y, m, d):
     """Try the OLD (pre-2019) URL (zip archive)."""
@@ -267,14 +301,15 @@ def fetch_old(y, m, d):
     if status != 200 or not content:
         return None, f"http_{status}" if status != 200 else "empty_response"
     if content[:4] != b"PK\x03\x04":
-        return None, "not_a_zip"
+        snippet = content[:80].decode("utf-8", errors="replace").replace("\n", " ")
+        return None, f"not_a_zip: {snippet}"
     try:
         with zipfile.ZipFile(BytesIO(content)) as z:
             with z.open(z.namelist()[0]) as f:
                 df = pd.read_csv(f)
         df = strip_df(df)
         if "TIMESTAMP" not in df.columns:
-            return None, "missing_TIMESTAMP"
+            return None, f"missing_TIMESTAMP (got: {list(df.columns)[:5]})"
         parsed = pd.to_datetime(df["TIMESTAMP"], format="%d-%b-%Y", errors="coerce").dt.date
         ok, why = validate_parsed(parsed, date(y, m, d))
         if not ok:
@@ -304,7 +339,7 @@ def fetch_old(y, m, d):
     except zipfile.BadZipFile:
         return None, "bad_zip"
     except Exception as e:
-        return None, f"parse_error: {type(e).__name__}"
+        return None, f"parse_error: {type(e).__name__}: {e}"[:200]
 
 
 # ============================================================
@@ -368,12 +403,12 @@ def download_date(d):
                 "category": "FIXED_HOLIDAY", "reason": FIXED_HOLIDAYS[mm_dd]}
 
     # Grace period — recent dates are retried, not classified as holidays.
-    # NSE's archive CDN lags 12-24h behind the main site, so a same-day
-    # workflow run will 404 for yesterday's file even though it exists.
+    # We include the actual failure reasons so the log tells us what happened.
     if days_ago <= GRACE_PERIOD_DAYS:
+        detail = " | ".join(reasons)[:250] if reasons else "no_detail"
         return {"date": d.isoformat(), "status": "fail",
                 "category": "NETWORK_ERROR",
-                "reason": f"Not yet on NSE archive ({days_ago}d old) — will retry"}
+                "reason": f"Recent date ({days_ago}d old) — will retry. {detail}"}
 
     # Older failures: safe to classify as permanent holiday / gap
     if any("stale_file" in r for r in reasons):
@@ -719,7 +754,6 @@ def main():
         info("")
         good("Nothing to fetch — collection is up to date.")
 
-        # Still consolidate + rebuild manifest (cheap)
         if not args.no_consolidate:
             section("STEP 4 — Consolidate completed months")
             consolidated = consolidate_completed_months(today)
