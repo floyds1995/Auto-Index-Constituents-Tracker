@@ -429,4 +429,4 @@ date,weekday,category,detail,reason
 2026-05-28,Thursday,HOLIDAY_NON_FIXED,Market closed (NSE serves stale file),
 2026-06-26,Friday,HOLIDAY_NON_FIXED,Market closed (NSE serves stale file),
 2026-09-14,Monday,HOLIDAY_NON_FIXED,Market closed (NSE serves stale file),
-2026-09-21,Monday,NETWORK_ERROR,,Not yet on NSE archive (1d old) — will retry
+2026-09-21,Monday,NETWORK_ERROR,,Recent date (1d old) — will retry. new: empty_date_column | old: http_404
