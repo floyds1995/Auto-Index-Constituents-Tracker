@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-NSE Equity OHLCV Daily Updater — hardened for GitHub Actions
+NSE Equity OHLCV Daily Updater — v2
+
+Fixes Unicode whitespace in DATE1 that pandas .str.strip() misses.
 """
 
 import argparse
 import logging
 import os
+import re
 import sys
 import time
 import zipfile
@@ -35,8 +38,6 @@ MAX_RETRIES      = 5
 RETRY_BACKOFF    = 3.0
 GRACE_PERIOD_DAYS = 3
 
-# Force uncompressed responses. 'identity' means "no compression".
-# This eliminates gzip/brotli/deflate as a variable entirely.
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -125,7 +126,7 @@ def parquet_path_for(ym):
 
 
 # ============================================================
-# HTTP — plain requests, no session
+# HTTP
 # ============================================================
 def http_get(url):
     """GET with retries. Returns (status_code, content, content_encoding)."""
@@ -146,13 +147,26 @@ def http_get(url):
 
 
 # ============================================================
-# Validation
+# Validation helpers
 # ============================================================
+# Regex that matches ALL Unicode whitespace (including \xa0, \u200b, etc.)
+_WS_RE = re.compile(r'\s+', flags=re.UNICODE)
+
+def clean_str(s):
+    """Convert to string, strip all Unicode whitespace."""
+    return _WS_RE.sub('', str(s))
+
 def strip_df(df):
+    """Strip whitespace from column names AND all string values.
+
+    Uses a regex that also catches non-breaking spaces and other Unicode
+    whitespace — pandas' .str.strip() only handles ASCII whitespace.
+    """
     df.columns = [c.strip() for c in df.columns]
     for col in df.columns:
-        if df[col].dtype == "object":
-            df[col] = df[col].astype(str).str.strip()
+        # Catch both object and pandas 'string' dtypes
+        if df[col].dtype == "object" or str(df[col].dtype) == "string":
+            df[col] = df[col].astype(str).map(clean_str)
     return df
 
 def validate_parsed(parsed_dates, expected_date, min_match=0.80):
@@ -180,23 +194,18 @@ def validate_dataframe(df):
 
 
 # ============================================================
-# Fetch NEW format (2019+)
+# Fetch NEW (2019+)
 # ============================================================
 def fetch_new(y, m, d):
     url = url_new(y, m, d)
     status, content, enc = http_get(url)
 
-    # Diagnostic logging — will show in workflow output
     if status != 200:
         info(f"     [debug] NEW status={status} enc={enc}")
         return None, f"http_{status}"
 
     if not content:
-        info(f"     [debug] NEW status=200 enc={enc} body=empty")
         return None, "empty_response"
-
-    info(f"     [debug] NEW status=200 bytes={len(content):,} enc={enc} "
-         f"ct={content[:30]!r}")
 
     if content[:15].lstrip().startswith(b"<"):
         snippet = content[:80].decode("utf-8", errors="replace").replace("\n", " ")
@@ -210,12 +219,14 @@ def fetch_new(y, m, d):
         if "DATE1" not in df.columns:
             return None, f"missing_DATE1 (got columns: {list(df.columns)[:5]})"
 
-        # Diagnostic: check first few DATE1 values
-        sample = df["DATE1"].head(3).tolist()
+        # Belt-and-suspenders — explicitly clean DATE1 before parsing.
+        df["DATE1"] = df["DATE1"].astype(str).map(clean_str)
 
         parsed = pd.to_datetime(df["DATE1"], format="%d-%b-%Y", errors="coerce").dt.date
+
         if parsed.isna().all():
-            return None, f"all_DATE1_NaT (samples={sample})"
+            samples = df["DATE1"].head(3).tolist()
+            return None, f"all_DATE1_NaT (samples={samples})"
 
         ok, why = validate_parsed(parsed, date(y, m, d))
         if not ok:
@@ -245,7 +256,7 @@ def fetch_new(y, m, d):
 
 
 # ============================================================
-# Fetch OLD format (pre-2019)
+# Fetch OLD (pre-2019)
 # ============================================================
 def fetch_old(y, m, d):
     url = url_old(y, m, d)
@@ -262,7 +273,10 @@ def fetch_old(y, m, d):
         df = strip_df(df)
         if "TIMESTAMP" not in df.columns:
             return None, f"missing_TIMESTAMP (got: {list(df.columns)[:5]})"
+
+        df["TIMESTAMP"] = df["TIMESTAMP"].astype(str).map(clean_str)
         parsed = pd.to_datetime(df["TIMESTAMP"], format="%d-%b-%Y", errors="coerce").dt.date
+
         ok, why = validate_parsed(parsed, date(y, m, d))
         if not ok:
             return None, why
