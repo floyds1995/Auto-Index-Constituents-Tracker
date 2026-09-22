@@ -2,7 +2,7 @@ name: Update NSE OHLCV
 
 on:
   schedule:
-    - cron: '20 0 * * *'   # 5:50 AM IST = 00:20 UTC
+    - cron: '30 2 * * *'   # 5:50 AM IST = 00:20 UTC
   workflow_dispatch:
 
 jobs:
