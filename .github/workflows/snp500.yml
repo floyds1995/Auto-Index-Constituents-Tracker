@@ -2,7 +2,7 @@ name: Update S&P 500 Constituents
 
 on:
   schedule:
-    - cron: '30 23 * * *'      # 5:00 AM IST = 23:30 UTC
+    - cron: '50 2 * * *'      # 5:00 AM IST = 23:30 UTC
   workflow_dispatch:
 
 jobs:
