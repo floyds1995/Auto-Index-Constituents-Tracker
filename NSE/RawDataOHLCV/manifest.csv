@@ -7852,4 +7852,4 @@ date,location,rows,size_bytes,source,collected_at
 2026-09-28,parquet/2026-09.parquet,3526,2682373,new,consolidated
 2026-09-29,parquet/2026-09.parquet,3522,2682373,new,consolidated
 2026-09-30,parquet/2026-09.parquet,3529,2682373,new,consolidated
-2026-10-01,csv/2026-10/20261001.csv,3534,357159,new,2026-10-02T08:52:14Z
+2026-10-01,csv/2026-10/20261001.csv,3534,357159,new,2026-10-03T08:28:38Z

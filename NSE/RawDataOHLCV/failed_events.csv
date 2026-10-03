@@ -430,3 +430,4 @@ date,weekday,category,detail,reason
 2026-06-26,Friday,HOLIDAY_NON_FIXED,Market closed (NSE serves stale file),
 2026-09-14,Monday,HOLIDAY_NON_FIXED,Market closed (NSE serves stale file),
 2026-09-21,Monday,NETWORK_ERROR,,"Recent date (1d old) — will retry. new: all_DATE1_NaT (samples=[' 21-Sep-2026', ' 21-Sep-2026', ' 21-Sep-2026']) | old: http_404"
+2026-10-02,Friday,FIXED_HOLIDAY,,Gandhi Jayanti
