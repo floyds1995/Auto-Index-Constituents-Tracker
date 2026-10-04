@@ -1,6 +1,6 @@
 NSE Equity Data — Failed Events Summary
-Generated: 2026-10-03T08:28:44Z
-Range:     1995-01-02 → 2026-10-02
+Generated: 2026-10-04T08:40:47Z
+Range:     1995-01-02 → 2026-10-03
 
 Expected weekdays:  8285
 Successfully on disk: 7854
