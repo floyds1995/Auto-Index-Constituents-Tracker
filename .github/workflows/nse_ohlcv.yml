@@ -1,4 +1,4 @@
-name: Update NSE OHLCV
+name: Update NSE OHLCV Data
 
 on:
   schedule:
