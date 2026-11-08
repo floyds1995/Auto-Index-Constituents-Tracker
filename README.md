@@ -21,11 +21,11 @@
 ![NSE_Symbol Changes](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/symbolchange.yaml/badge.svg)
 [![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F363168873%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/symbolchange.yaml)
 
-Automated daily tracker for historical index constituents and NSE reference data. Currently supports S&P 500, Nasdaq 100, 13 NSE indices (Nifty 50 through Nifty Smallcap 250), two NSE reference archives (symbol changes and corporate actions), and the complete NSE equity EOD OHLCV history since 1995.
+Automated daily tracker for historical index constituents, NSE reference data, and equity OHLCV. Currently supports S&P 500, Nasdaq 100, 12 NSE indices (Nifty 50 through Nifty Smallcap 250), two NSE reference archives (symbol changes and corporate actions), the complete NSE equity EOD OHLCV history since 1995, and US equity EOD OHLCV covering **2019-01-01 → present** for the current S&P 500 and Nasdaq-100 universe.
 
-Each dataset is stored as a single CSV (or, for OHLCV, monthly Parquet files). GitHub Actions runs on a schedule, fetches the latest data from the official source, and appends new rows only when something actually changed.
+Each dataset is stored as a single CSV (or, for OHLCV, Parquet files). GitHub Actions runs on a schedule, fetches the latest data from the official source, and appends new rows only when something actually changed.
 
-No servers. No cron jobs. No external services — just GitHub Actions, Wikipedia, and NSE's official endpoints.
+No servers. No cron jobs. No external services — just GitHub Actions, Wikipedia, NSE's official endpoints, and **Yahoo Finance (via `yfinance`)**.
 
 ## What It Does
 
@@ -33,7 +33,7 @@ No servers. No cron jobs. No external services — just GitHub Actions, Wikipedi
 
 Every tracked index is stored in this format:
 
-```text
+```
 date,tickers
 1996-01-02,"AAL,AAMRQ,AAPL,ABI,..."
 1996-01-03,"AAL,AAMRQ,AAPL,ABI,..."
@@ -60,13 +60,13 @@ If nothing changed, the workflow exits cleanly with no commit.
 
 Two additional files maintain an append-only history of NSE reference data:
 
-```text
+```
 SYMBOL,COMPANY NAME,SERIES,PURPOSE,FACE VALUE,EX-DATE,RECORD DATE,BOOK CLOSURE START DATE,BOOK CLOSURE END DATE
 CGVAK,CG Vak Software & Exports Limited,EQ,Dividend - Re 1 Per Share,10,21-Sep-2026,21-Sep-2026,-,-
 ...
 ```
 
-```text
+```
 Name,Old Symbol,New Symbol,Date of change
 360 ONE WAM LIMITED,IIFLWAM,360ONE,23-Jan-2023
 ...
@@ -88,7 +88,7 @@ Complete daily bhavcopy for the NSE equity segment, covering **1995-01-02 → pr
 
 Stored as one Parquet file per completed month, plus a live CSV folder for the current (incomplete) month:
 
-```text
+```
 NSE/RawDataOHLCV/
 ├── parquet/
 │   ├── 1995-01.parquet
@@ -136,6 +136,58 @@ Each scheduled run:
 9. Commits if anything changed
 
 **Coverage:** ~7,945 of 8,275 expected weekdays. The 430 missing dates are all NSE market closures — documented in `failed_events.csv` with a reason per date.
+
+### US equity EOD OHLCV
+
+Daily OHLCV for every ticker that currently appears in the tracked S&P 500 and Nasdaq-100 universes, covering **2019-01-01 → present**. Data is fetched from **Yahoo Finance** via the `yfinance` Python library.
+
+Unlike the NSE OHLCV dataset, US data is **stored per ticker**, not per month. Each ticker gets its own Parquet file:
+
+```
+us_data/raw_ohlcv/
+├── parquet/
+│   ├── AAPL.parquet
+│   ├── MSFT.parquet
+│   ├── NVDA.parquet
+│   ├── ...
+│   └── ZTS.parquet
+├── manifest.csv                ← row counts, date ranges, file sizes
+├── ticker_aliases.csv          ← old → new symbol mapping (delistings/renames)
+├── update_log.csv              ← per-run status (created/updated/rewritten/up_to_date)
+└── update_us_ohlcv.py          ← updater script
+```
+
+There is **no live CSV folder** for US data — everything is Parquet.
+
+**Schema (identical across every ticker file):**
+
+| Column | Type | Description |
+|---|---|---|
+| `Ticker` | dictionary (string) | US ticker symbol |
+| `Date` | timestamp (ns) | Trading date |
+| `Open` | float32 | Opening price |
+| `High` | float32 | Day high |
+| `Low` | float32 | Day low |
+| `Close` | float32 | Closing price |
+| `Adj_Close` | float32 | Adjusted closing price (dividends/splits) |
+| `Volume` | int64 | Total traded quantity |
+| `Split_Ratio` | float32 | Split ratio applied on that date (0 if none) |
+
+Each scheduled run (`update_us_ohlcv.py`):
+
+1. **Load aliases** — reads `ticker_aliases.csv` (generated once from `tirramind.delistings()`) to map old tickers to their successors. This lets the updater follow renames and delistings.
+2. **Determine the active universe** — parses the **last row** of the S&P 500 and Nasdaq-100 constituent CSVs, extracts the ticker lists, and validates each symbol against a strict ticker regex.
+3. **Diff against existing files** — lists all `*.parquet` files already on disk to find missing tickers.
+4. **Update existing tickers** — for each existing Parquet file:
+   - If a **new split or dividend** is detected since the file's last date → **full rewrite** from `2019-01-01` to today (so `Adj_Close` and `Split_Ratio` stay correct).
+   - Otherwise → **tail fetch** only the dates after the file's last date, concatenate, deduplicate, and overwrite.
+   - If the ticker has an alias and the tail is empty, try the alias symbol; if the alias has newer data, force a full rewrite under the original filename.
+5. **Fetch missing tickers** — for tickers with no Parquet file yet, do a full history fetch (`2019-01-01 → today`) and write a new Parquet file.
+6. **Rebuild `manifest.csv`** — scans every Parquet file on disk and writes `ticker, rows, first_date, last_date, file_size_kb`.
+7. **Write `update_log.csv`** — per-ticker status (`created`, `updated`, `rewritten_corp_action`, `up_to_date`, `no_data`).
+8. **Commit if anything changed** — only if the Parquet files, manifest, or log actually differ.
+
+**Coverage:** The universe is whatever S&P 500 + Nasdaq-100 contain on the most recent constituent snapshot. New IPOs/joiners get picked up automatically on the next run once they appear in the last row of the constituent CSVs. Tickers that leave both indices are **not deleted** — their Parquet files remain on disk as a historical archive.
 
 ## Supported Sources
 
@@ -189,18 +241,32 @@ Two historical endpoints:
 
 The updater tries the newer endpoint first (richer schema — includes delivery quantities), falls back to the older zip archive for dates where the newer one doesn't exist. There is no cookie or session handling required; the archive endpoints are open.
 
+### US equity EOD OHLCV
+
+| Dataset | Location | Source |
+|---|---|---|
+| US equity OHLCV | `us_data/raw_ohlcv/parquet/<TICKER>.parquet` | Yahoo Finance via `yfinance` |
+
+- **Provider:** Yahoo Finance (`https://finance.yahoo.com`)
+- **Python client:** `yfinance` (version pinned in `requirements.txt`)
+- **Authentication:** none required — `yfinance` uses Yahoo's public quote endpoints
+- **Coverage start:** `2019-01-01` (hard-coded in `update_us_ohlcv.py` as `START_DATE`)
+- **Universe:** current S&P 500 + Nasdaq-100 members (from the last row of the constituent CSVs)
+- **Alias handling:** `tirramind` is used **once** to generate `ticker_aliases.csv` (mapping delisted/re-named tickers to successors). After that file exists, the updater relies on it and does not call `tirramind` again.
+
 ## Repository Structure
 
-```text
+```
 Auto-Index-Constituents-Tracker/
 │
 ├── .github/workflows/
 │   ├── snp500.yml                            # S&P 500 daily automation
 │   ├── ndx100.yml                            # Nasdaq 100 daily automation
 │   ├── nse.yml                               # NSE index daily automation
-│   ├── symbolchange.yml                      # NSE symbol change daily automation
-│   ├── corporate_actions.yml                 # NSE corporate actions daily automation
-│   └── nse_ohlcv.yml                         # NSE equity OHLCV daily automation
+│   ├── symbolchange.yaml                     # NSE symbol change daily automation
+│   ├── corporate_actions.yaml                # NSE corporate actions daily automation
+│   ├── nse_ohlcv.yml                         # NSE equity OHLCV daily automation
+│   └── US_ohlcv.yml                          # US equity OHLCV daily automation
 │
 ├── SNP500/
 │   ├── update_snp500.py
@@ -235,6 +301,19 @@ Auto-Index-Constituents-Tracker/
 │       └── csv/
 │           └── 2026-09/
 │               └── YYYYMMDD.csv
+│
+├── us_data/
+│   └── raw_ohlcv/
+│       ├── update_us_ohlcv.py
+│       ├── manifest.csv
+│       ├── ticker_aliases.csv
+│       ├── update_log.csv
+│       └── parquet/
+│           ├── AAPL.parquet
+│           ├── MSFT.parquet
+│           ├── NVDA.parquet
+│           ├── ...
+│           └── ZTS.parquet
 │
 ├── requirements.txt
 └── README.md
@@ -310,38 +389,58 @@ Failure classes are logged in `failed_events.csv`: `FIXED_HOLIDAY` (Republic Day
 
 The updater runs every day including weekends. Weekend runs are effectively no-ops (the expected weekday list naturally skips them), but the Saturday run ensures Friday's data is collected the morning after, rather than waiting until Monday.
 
+### US equity OHLCV
+
+The script (`us_data/raw_ohlcv/update_us_ohlcv.py`):
+
+1. **Load aliases** — reads `ticker_aliases.csv`, a one-time-generated mapping from `tirramind.delistings()` that links old tickers to their successors. If the file doesn't exist yet, it is generated first.
+2. **Build the active universe** — reads the **last row** of `SNP500/S&P 500 Historical Components & Changes.csv` and `NDX100/Nasdaq 100 Historical Components & Changes.csv`, splits the ticker strings, and validates each against `^(?=.*[A-Z])[A-Z0-9\.\-]{1,8}$`.
+3. **Diff against disk** — lists every `*.parquet` in `us_data/raw_ohlcv/parquet/` to find which universe tickers are missing.
+4. **Update existing tickers** — for each existing file:
+   - Checks for **new splits** (`ticker.splits`) or **new dividends** (`ticker.dividends`) after the file's last date.
+   - If either exists → **full rewrite** from `2019-01-01` to today (keeps `Adj_Close` and `Split_Ratio` accurate).
+   - Otherwise → **tail fetch** only `last_date + 1 day → today`, concatenate, deduplicate on `Date`, and overwrite.
+   - If the ticker has an alias and the tail is empty, retries with the alias symbol; if the alias has newer data, forces a full rewrite under the original filename.
+5. **Fetch missing tickers** — for every universe ticker with no Parquet file, does a full history fetch from `2019-01-01` to today and writes a new file.
+6. **Rebuild manifest** — scans every Parquet file and writes `ticker, rows, first_date, last_date, file_size_kb` to `manifest.csv`.
+7. **Write update log** — records `symbol, status, rows, new_rows` per ticker in `update_log.csv`.
+8. **Commit** — only if the Parquet files, `manifest.csv`, or `update_log.csv` actually changed.
+
+Random sleeps are inserted every 50 tickers (2–4 seconds) and after each new ticker (0.5–1.5 seconds) to stay friendly to Yahoo Finance’s rate limits.
+
 ### Idempotency and append-only guarantee
 
 All scripts are idempotent. Re-running with no source-side changes produces no output and no commit.
 
 The two NSE reference archives are append-only: existing rows are never modified, deleted, or reordered. If NSE re-publishes an old record, the sync script silently skips it. If a row you have locally differs slightly from what NSE now shows (e.g. a typo fix), both versions persist — the historical record is preserved.
 
-The OHLCV collection is also idempotent, but not append-only in the same sense — a given date's CSV or Parquet file can be safely re-downloaded and overwritten. The filesystem is the source of truth; deleting a file simply causes the next run to re-fetch it.
+The OHLCV collections (NSE and US) are also idempotent, but not append-only in the same sense — a given date's data can be safely re-downloaded and overwritten. For NSE, the filesystem is the source of truth; deleting a file causes the next run to re-fetch it. For US, the per-ticker Parquet file is the source of truth; a full rewrite simply replaces it.
 
 ## Automated Schedules
 
-All six workflows run in the early morning IST, staggered 10 minutes apart so their commits never race on push:
+All **seven** workflows run in the early morning IST, staggered 10 minutes apart so their commits never race on push:
 
 | Workflow | Cron (UTC) | IST equivalent | Source |
 |---|---|---|---|
 | `snp500.yml` | `30 23 * * *` | 5:00 AM | Wikipedia |
 | `ndx100.yml` | `40 23 * * *` | 5:10 AM | Wikipedia |
 | `nse.yml` | `50 23 * * *` | 5:20 AM | NSE Indices |
-| `corporate_actions.yml` | `0 0 * * *` | 5:30 AM | NSE API |
-| `symbolchange.yml` | `10 0 * * *` | 5:40 AM | NSE archive |
+| `corporate_actions.yaml` | `0 0 * * *` | 5:30 AM | NSE API |
+| `symbolchange.yaml` | `10 0 * * *` | 5:40 AM | NSE archive |
 | `nse_ohlcv.yml` | `20 0 * * *` | 5:50 AM | NSE archive |
+| `US_ohlcv.yml` | `05 3 * * *` | 8:35 AM | Yahoo Finance (`yfinance`) |
 
 - GitHub Actions schedules are always in UTC and may be delayed by 5–30 minutes during peak load
 - The 10-minute gaps mean each workflow finishes and pushes before the next one starts — no commit races, no rebase needed
 - Manual runs can be triggered anytime from the Actions tab → select the workflow → Run workflow
-- `nse_ohlcv.yml` runs seven days a week. On weekends the OHLCV script exits quickly because there is nothing new to fetch
+- `nse_ohlcv.yml` and `US_ohlcv.yml` run seven days a week. On weekends the OHLCV scripts exit quickly because there is nothing new to fetch
 
 ## Setup
 
 ### Prerequisites
 
 - A GitHub account
-- A free or paid GitHub Actions plan (free is sufficient — this repo uses roughly 90 minutes of Actions time per month across all six workflows)
+- A free or paid GitHub Actions plan (free is sufficient — this repo uses roughly <!-- FILL IN: recalculated minutes --> minutes of Actions time per month across all seven workflows)
 
 ### GitHub Setup
 
@@ -376,19 +475,24 @@ python NSE/update_nse.py
 python NSE/RawData/update_symbolchange.py
 python NSE/RawData/update_corporate_actions.py
 python NSE/RawDataOHLCV/update_ohlcv.py
+python us_data/raw_ohlcv/update_us_ohlcv.py
 ```
 
 Each script prints a short summary — local row count, remote row count, and whether anything was added.
 
-The OHLCV updater additionally supports:
+The OHLCV updaters additionally support:
 
 ```bash
 python NSE/RawDataOHLCV/update_ohlcv.py --dry-run          # show plan, no downloads
 python NSE/RawDataOHLCV/update_ohlcv.py --no-consolidate   # skip Parquet conversion
 python NSE/RawDataOHLCV/update_ohlcv.py --date 2026-09-18  # single date
+
+python us_data/raw_ohlcv/update_us_ohlcv.py --missing-only  # only fetch tickers with no Parquet file
 ```
 
 ## Reading the OHLCV data
+
+### NSE
 
 ```python
 import pandas as pd
@@ -411,6 +515,25 @@ reliance = pd.concat(dfs).sort_values("DATE")
 ```
 
 The current (incomplete) month lives at `NSE/RawDataOHLCV/csv/YYYY-MM/` as one CSV per trading day. It is browsable directly on GitHub.
+
+### US
+
+```python
+import pandas as pd, glob
+
+# One ticker's full history
+aapl = pd.read_parquet("us_data/raw_ohlcv/parquet/AAPL.parquet")
+
+# Every ticker on a given date (useful for cross-sectional work)
+import glob
+frames = []
+for f in glob.glob("us_data/raw_ohlcv/parquet/*.parquet"):
+    d = pd.read_parquet(f, columns=["Ticker", "Date", "Close"])
+    frames.append(d[d["Date"] == "2025-06-30"])
+cross_section = pd.concat(frames).set_index("Ticker")
+```
+
+There is **no CSV layer** for US data — all history lives in the per-ticker Parquet files. The `manifest.csv` gives you a quick index of every ticker, its row count, and its date range.
 
 ## Adding a New Source
 
@@ -443,8 +566,8 @@ The next scheduled run picks it up automatically.
 
 ### For OHLCV-style (bulk historical + daily incremental)
 
-1. Copy `NSE/RawDataOHLCV/update_ohlcv.py` as a template
-2. Adjust `COLLECTION_START`, the URL builders, and the failure-classification rules for the new source
+1. Copy `NSE/RawDataOHLCV/update_ohlcv.py` or `us_data/raw_ohlcv/update_us_ohlcv.py` as a template
+2. Adjust `COLLECTION_START` / `START_DATE`, the URL builders, and the failure-classification rules for the new source
 3. Add a matching workflow under `.github/workflows/`
 4. Commit and push
 
@@ -456,7 +579,7 @@ To run any workflow immediately:
 2. Click the workflow name in the left sidebar
 3. Click **Run workflow → Run workflow**
 
-Each run takes roughly 30–90 seconds depending on the source. The OHLCV updater's runtime varies with how many dates are missing — usually 1–2 seconds on a normal day, up to a few minutes when catching up.
+Each run takes roughly 30–90 seconds depending on the source. The OHLCV updaters’ runtime varies with how many dates/tickers are missing — usually 1–2 seconds on a normal day, up to a few minutes when catching up.
 
 ## Credits & Data Sources
 
@@ -528,6 +651,18 @@ Both are open, unauthenticated, and use standard HTTP. The OHLCV updater does no
 
 NSE Indices Limited is the owner of all NSE index and OHLCV data. Redistribution is subject to NSE's terms of use.
 
+### US Equity OHLCV Data
+
+The US OHLCV dataset is sourced from **Yahoo Finance** through the [`yfinance`](https://github.com/ranaroussi/yfinance) Python library.
+
+- **Provider:** Yahoo Finance (`https://finance.yahoo.com`)
+- **Client library:** `yfinance` (MIT License)
+- **Authentication:** none — public quote endpoints
+- **Terms of use:** Yahoo Finance’s [Terms of Service](https://legal.yahoo.com/us/en/yahoo/terms/product-atos/apiforydn/index.html) and [API Terms](https://legal.yahoo.com/us/en/yahoo/terms/product-atos/apiforydn/index.html) apply. Yahoo does not provide an official public API for bulk historical data; `yfinance` relies on Yahoo’s website endpoints. Users are responsible for ensuring their usage complies with Yahoo’s terms.
+- **Adjustment:** `Adj_Close` is populated from Yahoo’s “Adj Close” column (split- and dividend-adjusted). `Close` is the raw closing price. `Split_Ratio` is non-zero only on dates where Yahoo reports a split.
+- **Delisted / renamed tickers:** `ticker_aliases.csv` (generated once from `tirramind.delistings()`) maps old tickers to successors. If Yahoo has no data under the old symbol but the alias does, the updater rewrites the file under the old symbol with the alias’s data. Tickers that leave the S&P 500 / Nasdaq-100 universe are **not deleted** — their last-known Parquet file remains on disk.
+- **Universe bias:** The ticker universe is the **current** S&P 500 + Nasdaq-100 membership. Historical members that are no longer in either index are not automatically fetched unless they are reachable via an alias. This means the US OHLCV dataset is **not survivorship-bias-free** in the way the constituent CSVs are — it tracks the current universe forward from 2019.
+
 ### How the NSE Historical Data Was Built
 
 Unlike the S&P 500 dataset (which traces back to a single commercial source), the NSE historical files were assembled manually from two sources:
@@ -560,10 +695,11 @@ This repository is provided for research and educational purposes only.
 - NSE constituent data is owned by NSE Indices Limited and subject to their terms of use
 - NSE historical constituent data is a best-effort reconstruction from archived snapshots and press releases — it may contain gaps, approximate dates, or corporate actions miscategorized as changes
 - The symbol change and corporate action archives are append-only and preserved as-is. Errors present in NSE's published data will propagate through to these files
-- The OHLCV data is sourced from NSE's public archives. Precision on prices is limited to float32 (~7 significant digits) — sufficient for NSE's 2-decimal price convention, but not for high-precision financial computation
+- The NSE OHLCV data is sourced from NSE's public archives. Precision on prices is limited to float32 (~7 significant digits) — sufficient for NSE's 2-decimal price convention, but not for high-precision financial computation
+- The US OHLCV data is sourced from Yahoo Finance via `yfinance` and is subject to Yahoo's terms of service. Prices are float32; `Adj_Close` is Yahoo's adjusted close, which may change retroactively if Yahoo revises its adjustment factors. The universe is the current S&P 500 + Nasdaq-100 membership, so it is **not survivorship-bias-free** for dates before a ticker joined the index
 - Nothing here constitutes financial advice
 
-If you are using this data for quantitative backtesting, be aware of the risks of survivorship bias and look-ahead bias. This dataset is specifically designed to help mitigate survivorship bias by preserving the full historical membership list — but only if the data is correct.
+If you are using this data for quantitative backtesting, be aware of the risks of survivorship bias and look-ahead bias. The constituent CSVs are specifically designed to help mitigate survivorship bias by preserving the full historical membership list — but only if the data is correct. The US OHLCV dataset, by contrast, tracks the *current* universe forward from 2019 and therefore reflects survivorship bias for earlier dates.
 
 Always verify against an authoritative source before making financial decisions.
 
@@ -578,6 +714,7 @@ The data in this repository is subject to the terms of its upstream sources:
 - Wikipedia-derived change data: CC BY-SA 4.0
 - Nasdaq 100 historical data: Wikipedia, CC BY-SA 4.0
 - NSE index, symbol change, corporate actions, and OHLCV data: © NSE Indices Limited
+- US equity OHLCV data: Yahoo Finance; `yfinance` client library is MIT-licensed, but the underlying data is subject to Yahoo's Terms of Service
 
 Users are responsible for complying with all applicable upstream licenses.
 
@@ -588,6 +725,7 @@ Users are responsible for complying with all applicable upstream licenses.
 - **fja05680** — creator of [fja05680/sp500](https://github.com/fja05680/sp500), which provided the foundation, format, and methodology for this project
 - **Wikipedia contributors** — for maintaining the historical components pages that make ongoing automation possible
 - **NSE Indices Limited** — for publishing official constituent lists, symbol change archives, corporate action announcements, and EOD bhavcopy archives
+- **Yahoo Finance** and **`yfinance` contributors** — for making daily US equity OHLCV accessible without a commercial data contract
 
 ## Related Projects
 
