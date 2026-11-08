@@ -6,6 +6,9 @@
 ![NDX100](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/ndx100.yml/badge.svg)
 [![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F361301148%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/ndx100.yml)
 
+![US Data OHLCV](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/US_ohlcv.yml/badge.svg)
+[![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F363577729%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/US_ohlcv.yml)
+
 ![NSE_Constituents](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse.yml/badge.svg)
 [![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F361282030%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse.yml)
 
