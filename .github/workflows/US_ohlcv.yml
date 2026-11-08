@@ -2,7 +2,7 @@ name: Update US OHLCV Data
 
 on:
   schedule:
-    - cron: '3 05 * * *'   # 10:00 PM UTC (After US Market Close)
+    - cron: '05 3 * * *'   # 10:00 PM UTC (After US Market Close)
   workflow_dispatch:
 
 jobs:
