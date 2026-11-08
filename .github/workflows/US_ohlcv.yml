@@ -1,71 +1,43 @@
-name: US Daily Data Update 
+name: Update US OHLCV Data
 
 on:
   schedule:
-    - cron: '0 22 * * *' # Runs daily at 10 PM UTC
-  workflow_dispatch:      # Allows manual trigger
+    - cron: '0 22 * * *'   # 10:00 PM UTC (After US Market Close)
+  workflow_dispatch:
 
 jobs:
   update:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
-    timeout-minutes: 60
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Fetch all history so we can overwrite it
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install yfinance pandas pyarrow tirramind
 
-      - name: Run Data Pipeline
+      - name: Run US OHLCV pipeline
         env:
           PYTHONUNBUFFERED: 1
-        run: |
-          python -u us_data/raw_ohlcv/update_us_ohlcv.py
+        run: python -u us_data/raw_ohlcv/update_us_ohlcv.py
 
-      # ---------------------------------------------------------
-      # STEP 1: NORMAL PUSH (Saves the data to GitHub)
-      # ---------------------------------------------------------
-      - name: Commit and Push New Data
+      - name: Commit & push if changed
         run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add us_data/raw_ohlcv/
-          if ! git diff --cached --quiet; then
-            git commit -m "Data Update: $(date -u +'%Y-%m-%d')"
-            git push
-          else
+          if git diff --staged --quiet; then
             echo "No changes to commit."
+          else
+            git commit -m "US OHLCV data: $(date -u +%Y-%m-%d)"
+            git push
           fi
-
-      # ---------------------------------------------------------
-      # STEP 2: WIPE HISTORY (Keeps repo size at ~50 MB)
-      # ---------------------------------------------------------
-      - name: Wipe Git History (Squash)
-        run: |
-          # Create an orphan branch (no history)
-          git checkout --orphan latest_branch
-          
-          # Add all files
-          git add -A
-          
-          # Commit
-          git commit -am "Squashed History: $(date -u +'%Y-%m-%d')"
-          
-          # Delete main and rename orphan to main
-          git branch -D main
-          git branch -m main
-          
-          # Force push to GitHub
-          git push -f origin main
