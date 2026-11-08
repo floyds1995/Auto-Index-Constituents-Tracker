@@ -1,0 +1,71 @@
+name: US Daily Data Update 
+
+on:
+  schedule:
+    - cron: '0 22 * * *' # Runs daily at 10 PM UTC
+  workflow_dispatch:      # Allows manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history so we can overwrite it
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas pyarrow tirramind
+
+      - name: Run Data Pipeline
+        env:
+          PYTHONUNBUFFERED: 1
+        run: |
+          python -u us_data/raw_ohlcv/update_us_ohlcv.py
+
+      # ---------------------------------------------------------
+      # STEP 1: NORMAL PUSH (Saves the data to GitHub)
+      # ---------------------------------------------------------
+      - name: Commit and Push New Data
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "actions@github.com"
+          git add us_data/raw_ohlcv/
+          if ! git diff --cached --quiet; then
+            git commit -m "Data Update: $(date -u +'%Y-%m-%d')"
+            git push
+          else
+            echo "No changes to commit."
+          fi
+
+      # ---------------------------------------------------------
+      # STEP 2: WIPE HISTORY (Keeps repo size at ~50 MB)
+      # ---------------------------------------------------------
+      - name: Wipe Git History (Squash)
+        run: |
+          # Create an orphan branch (no history)
+          git checkout --orphan latest_branch
+          
+          # Add all files
+          git add -A
+          
+          # Commit
+          git commit -am "Squashed History: $(date -u +'%Y-%m-%d')"
+          
+          # Delete main and rename orphan to main
+          git branch -D main
+          git branch -m main
+          
+          # Force push to GitHub
+          git push -f origin main
