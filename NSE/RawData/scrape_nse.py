@@ -10,6 +10,11 @@ Discovery strategies (tried in order, first success wins):
   1. Playwright headless browser  → JS-rendered page
   2. Plain requests               → grep HTML for xlsx URL
   3. Cached last-known URL        → fallback if NSE blocks cloud IPs
+
+Safety:
+  - Cache use is capped at MAX_CACHE_DAYS (default 3) to limit staleness.
+  - Cache use is logged loudly so stale runs are visible in Actions logs.
+  - stale_runs counter aborts after MAX_STALE_RUNS consecutive cache hits.
 """
 import sys
 import io
@@ -29,14 +34,14 @@ CHANGELOG_CSV = SCRIPT_DIR / "nse_delisted_changelog.csv"
 STATE_FILE    = SCRIPT_DIR / ".nse_delisted_state.json"
 
 # ─── Constants ──────────────────────────────────────────────────────
-TARGET_URL     = "https://www.nseindia.com/static/list/list-of-companies-proposed-to-be-delisted"
-TARGET_TEXT    = "List of Companies Delisted from NSE"
-MIN_ROWS       = 300
-MAX_CACHE_DAYS = 30
+TARGET_URL      = "https://www.nseindia.com/static/list/list-of-companies-proposed-to-be-delisted"
+TARGET_TEXT     = "List of Companies Delisted from NSE"
+MIN_ROWS        = 300     # quality gate — refuse to overwrite below this
+MAX_CACHE_DAYS  = 3       # hard cap on cached-URL staleness (was 30)
+MAX_STALE_RUNS  = 3       # abort after N consecutive cache-only runs
 
 # Composite key for row identity across runs.
 # Symbol alone is insufficient (VIKASHMET appears twice as different companies).
-# Symbol + Delisted Date uniquely identifies a delisting event.
 KEY_COLS  = ["Symbol", "ISIN", "Delisted Date"]
 DATA_COLS = ["Company Name", "Board", "Type of Delisting"]
 
@@ -62,9 +67,15 @@ def discover_via_playwright() -> str | None:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context(user_agent=HEADERS["User-Agent"], locale="en-US")
+            ctx = browser.new_context(
+                user_agent=HEADERS["User-Agent"], locale="en-US"
+            )
             page = ctx.new_page()
-            page.goto("https://www.nseindia.com/", wait_until="domcontentloaded", timeout=30_000)
+            page.goto(
+                "https://www.nseindia.com/",
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
             page.goto(TARGET_URL, wait_until="networkidle", timeout=45_000)
             links = page.eval_on_selector_all(
                 "a",
@@ -90,7 +101,10 @@ def discover_via_requests() -> str | None:
         r = s.get(TARGET_URL, timeout=20)
         r.raise_for_status()
         urls = re.findall(r'https?://[^"\'\s<>]+\.xlsx', r.text, re.IGNORECASE)
-        candidates = [u for u in urls if "delisted" in u.lower() and "proposed" not in u.lower()]
+        candidates = [
+            u for u in urls
+            if "delisted" in u.lower() and "proposed" not in u.lower()
+        ]
         if candidates:
             return candidates[0]
         print("  no xlsx URL in HTML (likely JS-rendered)")
@@ -100,19 +114,44 @@ def discover_via_requests() -> str | None:
 
 
 def load_cached_url() -> str | None:
+    """Return cached URL if fresh enough; else None. Increments stale counter."""
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
-        age_days = (time.time() - data.get("fetched_at", 0)) / 86400
-        if data.get("last_url") and age_days < MAX_CACHE_DAYS:
-            print(f"  cache is {age_days:.1f} days old, usable")
-            return data["last_url"]
-        print(f"  cache too old ({age_days:.1f} days)")
     except FileNotFoundError:
         print("  no cache file")
+        return None
     except Exception as e:
         print(f"  cache read failed: {e}")
-    return None
+        return None
+
+    age_days = (time.time() - data.get("fetched_at", 0)) / 86400
+    if not data.get("last_url"):
+        print("  cache file has no last_url")
+        return None
+    if age_days >= MAX_CACHE_DAYS:
+        print(f"  cache too old ({age_days:.1f} days >= {MAX_CACHE_DAYS}) — refusing")
+        return None
+
+    # Bump the stale-run counter and persist BEFORE returning
+    stale_runs = int(data.get("stale_runs", 0)) + 1
+    data["stale_runs"] = stale_runs
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"  could not persist stale counter: {e}")
+
+    print(f"  ⚠️  USING STALE CACHE — {age_days:.1f} days old, "
+          f"stale_runs={stale_runs}/{MAX_STALE_RUNS}")
+    print(f"      NSE may be blocking; data could be outdated.")
+
+    if stale_runs >= MAX_STALE_RUNS:
+        raise RuntimeError(
+            f"Cache used {stale_runs} runs in a row — NSE block suspected. "
+            "Refusing to continue serving stale data."
+        )
+    return data["last_url"]
 
 
 # ─── Downloader ─────────────────────────────────────────────────────
@@ -138,7 +177,9 @@ def download(url: str, retries: int = 3) -> bytes | None:
 # ─── Parser ─────────────────────────────────────────────────────────
 def parse_and_clean(content: bytes) -> pd.DataFrame:
     try:
-        df_raw = pd.read_excel(io.BytesIO(content), sheet_name="delisted", header=None)
+        df_raw = pd.read_excel(
+            io.BytesIO(content), sheet_name="delisted", header=None
+        )
     except ValueError:
         df_raw = pd.read_excel(io.BytesIO(content), sheet_name=0, header=None)
 
@@ -178,7 +219,6 @@ def _key_of(row: dict) -> tuple:
 
 
 def _row_summary(row: dict) -> str:
-    """One-line representation of a full row, for ADDED/REMOVED entries."""
     return " | ".join(str(row.get(c) or "") for c in KEY_COLS + DATA_COLS)
 
 
@@ -188,13 +228,11 @@ def compute_changes(old_df: pd.DataFrame | None, new_df: pd.DataFrame) -> list[d
         return []   # first run — nothing to diff against
 
     today = date.today().isoformat()
-
     old_lookup = {_key_of(r): r for _, r in old_df.iterrows()}
     new_lookup = {_key_of(r): r for _, r in new_df.iterrows()}
 
     changes: list[dict] = []
 
-    # Additions and updates
     for k, new_row in new_lookup.items():
         if k not in old_lookup:
             changes.append({
@@ -224,7 +262,6 @@ def compute_changes(old_df: pd.DataFrame | None, new_df: pd.DataFrame) -> list[d
                         "new_value":     nv,
                     })
 
-    # Removals (NSE corrected a mistake, or the row was miscategorised)
     for k, old_row in old_lookup.items():
         if k not in new_lookup:
             changes.append({
@@ -257,20 +294,23 @@ def append_changelog(changes: list[dict]) -> None:
 # ─── Main ───────────────────────────────────────────────────────────
 def main() -> int:
     print(f"Working directory : {SCRIPT_DIR}")
-    print(f"Current snapshot  : {OUTPUT_CSV}")
-    print(f"Changelog         : {CHANGELOG_CSV}")
+    print(f"Current snapshot  : {OUTPUT_CSV.name}")
+    print(f"Changelog         : {CHANGELOG_CSV.name}")
 
-    # Load previous snapshot BEFORE overwriting (for diffing)
     old_df = None
     if OUTPUT_CSV.exists():
         try:
             old_df = pd.read_csv(OUTPUT_CSV, dtype=str, keep_default_na=False)
             print(f"  previous snapshot: {len(old_df)} rows loaded for diffing")
         except Exception as e:
-            print(f"  ⚠️ could not load previous snapshot: {e} (changelog will skip this run)")
+            print(f"  ⚠️ could not load previous snapshot: {e}")
 
     print("\nStep 1: discovering download URL")
-    url = discover_via_playwright() or discover_via_requests() or load_cached_url()
+    try:
+        url = discover_via_playwright() or discover_via_requests() or load_cached_url()
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
     if not url:
         print("ERROR: all discovery strategies failed", file=sys.stderr)
         return 1
@@ -292,7 +332,10 @@ def main() -> int:
     print(f"  {len(df)} rows")
 
     if len(df) < MIN_ROWS:
-        print(f"ERROR: quality gate failed ({len(df)} < {MIN_ROWS})", file=sys.stderr)
+        print(
+            f"ERROR: quality gate failed ({len(df)} < {MIN_ROWS})",
+            file=sys.stderr,
+        )
         return 1
 
     print("Step 4: computing changes vs previous snapshot")
@@ -314,9 +357,13 @@ def main() -> int:
     print("Step 6: appending to changelog")
     append_changelog(changes)
 
-    # Persist last-known URL
+    # Persist last-known URL — reset stale_runs on successful fresh discovery
     with open(STATE_FILE, "w") as f:
-        json.dump({"last_url": url, "fetched_at": time.time()}, f)
+        json.dump({
+            "last_url":   url,
+            "fetched_at": time.time(),
+            "stale_runs": 0,
+        }, f)
 
     print("\nDone.")
     print(df.head().to_string())
