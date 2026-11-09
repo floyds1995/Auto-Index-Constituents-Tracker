@@ -2,3 +2,5 @@ pandas
 requests
 lxml
 pyarrow
+openpyxl        # ← ADD: required by pd.read_excel() for .xlsx (delisted scraper)
+playwright      # ← ADD: required by scrape_nse.py (browser discovery)
