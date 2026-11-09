@@ -1,4 +1,4 @@
-name: Daily NSE Data Pipeline
+name: Daily NSE Corporate Data Pipeline
 
 on:
   schedule:
