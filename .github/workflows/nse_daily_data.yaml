@@ -1,0 +1,81 @@
+name: Daily NSE Data Pipeline
+
+on:
+  schedule:
+    - cron: '35 2 * * *'   # 08:05 IST = 02:35 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nse-daily-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Run unified NSE pipeline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright + Chromium
+        run: |
+          python -m playwright install-deps chromium
+          python -m playwright install chromium
+
+      - name: Run unified NSE pipeline
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python NSE/RawData/nse_data_pipeline.py
+
+      - name: Commit & push if data changed
+        if: always()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add NSE/RawData/symbolchange.csv          || true
+          git add NSE/RawData/CorporateActions.csv      || true
+          git add NSE/RawData/nse_delisted_delisted.csv || true
+          [ -f NSE/RawData/nse_delisted_changelog.csv ] && git add NSE/RawData/nse_delisted_changelog.csv
+          [ -f NSE/RawData/.nse_delisted_state.json ]   && git add NSE/RawData/.nse_delisted_state.json
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "data: NSE daily update $(date -u +%F)"
+            git push
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nse-daily-${{ github.run_id }}
+          path: |
+            NSE/RawData/symbolchange.csv
+            NSE/RawData/symbolchange.csv.bak
+            NSE/RawData/CorporateActions.csv
+            NSE/RawData/CorporateActions.csv.bak
+            NSE/RawData/nse_delisted_delisted.csv
+            NSE/RawData/nse_delisted_changelog.csv
+            NSE/RawData/.nse_delisted_state.json
+          retention-days: 90
+          if-no-files-found: warn
