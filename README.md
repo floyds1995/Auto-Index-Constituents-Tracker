@@ -15,11 +15,8 @@
 ![NSE OHLCV](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse_ohlcv.yml/badge.svg)
 [![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F363577729%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse_ohlcv.yml)
 
-![NSE_Corporate Actions](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/corporate_actions.yaml/badge.svg)
-[![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F363168871%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/corporate_actions.yaml)
-
-![NSE_Symbol Changes](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/symbolchange.yaml/badge.svg)
-[![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F363168873%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/symbolchange.yaml)
+![NSE_Corporate Data](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse_daily_data.yaml/badge.svg)
+[![Last Run](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Ffloyds1995%2FAuto-Index-Constituents-Tracker%2Factions%2Fworkflows%2F363168871%2Fruns%3Fstatus%3Dcompleted%26per_page%3D1&query=%24.workflow_runs%5B0%5D.run_started_at&label=last%20run&color=blue)](https://github.com/floyds1995/Auto-Index-Constituents-Tracker/actions/workflows/nse_daily_data.yaml)
 
 Automated daily tracker for historical index constituents, NSE reference data, and equity OHLCV. Currently supports S&P 500, Nasdaq 100, 12 NSE indices (Nifty 50 through Nifty Smallcap 250), two NSE reference archives (symbol changes and corporate actions), the complete NSE equity EOD OHLCV history since 1995, and US equity EOD OHLCV covering **2019-01-01 → present** for the current S&P 500 and Nasdaq-100 universe.
 
