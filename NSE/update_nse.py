@@ -15,6 +15,7 @@ import io
 import os
 import re
 import sys
+import time
 from datetime import datetime
 import requests
 
@@ -45,6 +46,10 @@ HEADERS = {
 }
 
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Seconds to wait before each retry round. Length = number of extra attempts.
+# e.g. [10, 10]  -> initial run + 2 retries, each preceded by a 10s pause.
+RETRY_DELAYS = [10, 10]
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────
@@ -106,42 +111,71 @@ def append_row(path, date_str, tickers):
         writer.writerow([date_str, tickers])
 
 
+# ─── Per-index processing ────────────────────────────────────────────────
+def process_index(filename, url):
+    """Process one index. Returns 'unchanged' or 'changed:<date>'.
+    Raises on any failure so the caller can retry it."""
+    path = os.path.join(DATA_DIR, filename)
+    new_symbols = fetch_symbols(url)
+    new_tickers = ",".join(new_symbols)
+
+    last = read_last_row(path)
+    if last is None:
+        # Diagnose: show first 200 bytes so the log reveals the real format
+        with open(path, "rb") as f:
+            head = f.read(200)
+        raise ValueError(f"No data rows. File head = {head!r}")
+
+    if last[1].strip() == new_tickers:
+        return "unchanged"
+
+    now = datetime.now()
+    today = f"{now.month}/{now.day}/{now.year}"
+    append_row(path, today, new_tickers)
+    return f"changed:{today}"
+
+
 # ─── Main ────────────────────────────────────────────────────────────────
 def main():
-    changed, errors = [], []
+    changed = []
+    pending = dict(INDICES)          # indices still to process
+    attempt = 0                      # 0 = first run, 1 = first retry, ...
 
-    for filename, url in INDICES.items():
-        path = os.path.join(DATA_DIR, filename)
-        try:
-            new_symbols = fetch_symbols(url)
-            new_tickers = ",".join(new_symbols)
+    while pending and attempt <= len(RETRY_DELAYS):
+        if attempt > 0:
+            delay = RETRY_DELAYS[attempt - 1]
+            print(
+                f"\nRetry {attempt}/{len(RETRY_DELAYS)}: "
+                f"waiting {delay}s before retrying "
+                f"{len(pending)} index(es): {', '.join(pending)}"
+            )
+            time.sleep(delay)
 
-            last = read_last_row(path)
-            if last is None:
-                # Diagnose: show first 200 bytes so the log reveals the real format
-                with open(path, "rb") as f:
-                    head = f.read(200)
-                raise ValueError(f"No data rows. File head = {head!r}")
+        still_failing = {}
+        for filename, url in pending.items():
+            try:
+                result = process_index(filename, url)
+                if result.startswith("changed:"):
+                    date_str = result.split(":", 1)[1]
+                    print(f"  [{filename}] CHANGED → appended row for {date_str}")
+                    changed.append(filename)
+                else:
+                    print(f"  [{filename}] no change")
+            except Exception as e:
+                print(f"  [{filename}] ERROR: {e}")
+                still_failing[filename] = url
 
-            last_tickers = last[1].strip()
+        pending = still_failing
+        attempt += 1
 
-            if last_tickers == new_tickers:
-                print(f"  [{filename}] no change")
-            else:
-                now = datetime.now()
-                today = f"{now.month}/{now.day}/{now.year}"
-                append_row(path, today, new_tickers)
-                print(f"  [{filename}] CHANGED → appended row for {today}")
-                changed.append(filename)
-
-        except Exception as e:
-            print(f"  [{filename}] ERROR: {e}")
-            errors.append(filename)
+    errors = list(pending.keys())
 
     print()
     print(f"Summary: {len(INDICES)} checked, {len(changed)} changed, {len(errors)} errors")
     if changed:
         print(f"Changed: {', '.join(changed)}")
+    if errors:
+        print(f"Failed after {len(RETRY_DELAYS)} retries: {', '.join(errors)}")
     return 1 if errors else 0
 
 
