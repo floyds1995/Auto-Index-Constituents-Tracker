@@ -1,9 +1,9 @@
 NSE Equity Data — Failed Events Summary
-Generated: 2026-11-23T11:04:58Z
-Range:     1995-01-02 → 2026-11-22
+Generated: 2026-11-24T12:50:12Z
+Range:     1995-01-02 → 2026-11-23
 
-Expected weekdays:  8320
-Successfully on disk: 7887
+Expected weekdays:  8321
+Successfully on disk: 7888
 Missing (total):    433
 
 Breakdown by category:
@@ -43,4 +43,4 @@ Coverage by year:
   2023:  245 /  260  (94.2%)
   2024:  246 /  262  (93.9%)
   2025:  248 /  261  (95.0%)
-  2026:  218 /  232  (94.0%)
+  2026:  219 /  233  (94.0%)
